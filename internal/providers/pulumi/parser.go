@@ -8,6 +8,8 @@ import (
 	"github.com/infracost/infracost/internal/config"
 	"github.com/infracost/infracost/internal/providers/pulumi/aws"
 	"github.com/infracost/infracost/internal/schema"
+	pyaml "github.com/pulumi/pulumi-yaml/pkg/pulumiyaml"
+	"github.com/pulumi/pulumi-yaml/pkg/pulumiyaml/ast"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/display"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -81,6 +83,60 @@ func (p *Parser) parsePreviewDigest(t display.PreviewDigest, usage map[string]*s
 		var providerName = strings.Split(step.NewState.Type.String(), ":")[0]
 		// this section creates a gjson raw value for infracost to search thru.
 		var localInputs = step.NewState.Inputs
+		localInputs["urn"] = step.URN
+		localInputs["config"] = t.Config
+		localInputs["dependencies"] = step.NewState.Dependencies
+		localInputs["propertyDependencies"] = step.NewState.PropertyDependencies
+		localInputs["region"] = parseRegion(resourceType, t.Config)
+		var inputs, _ = json.Marshal(localInputs)
+		var rawValues = gjson.Parse(string(inputs))
+		tags := parseTags(resourceType, rawValues)
+		var usageData *schema.UsageData
+
+		if ud := usage[name]; ud != nil {
+			usageData = ud
+		}
+
+		resourceData := schema.NewPulumiResourceData(resourceType, providerName, name, tags, rawValues, string(step.URN))
+		refResources[name] = resourceData
+		// You have to load this in the loop so it will find the resources.
+		p.parseReferences(refResources, rawValues)
+		p.loadInfracostProviderUsageData(usage, refResources)
+		if r := p.createResource(resourceData, usageData); r != nil {
+			if step.Op == "same" {
+				pastResources = append(pastResources, r)
+			} else if step.Op == "create" {
+				resources = append(resources, r)
+			}
+		}
+	}
+	return pastResources, resources, nil
+}
+
+func (p *Parser) parsePulumiYaml(t pyaml.Template, usage map[string]*schema.UsageData, rawValues gjson.Result) ([]*schema.Resource, []*schema.Resource, error) {
+	baseResources := p.loadUsageFileResources(usage)
+
+	var resources []*schema.Resource
+	var pastResources []*schema.Resource
+	resources = append(resources, baseResources...)
+	refResources := make(map[string]*schema.ResourceData)
+
+	for i := range t.Resources {
+		var resource = t.Resources[i]
+		if resource.Value.Type.Value == "pulumi:pulumi:Stack" {
+			continue
+		}
+		var name = resource.Key.Value
+		var resourceType = deriveTfResourceTypes(resource.Value.Type.Value)
+		// log.Debugf("resource type: %s", resourceType)
+		if resourceType == "awsx" || resourceType == "unknown" {
+			continue
+		}
+		var providerName = strings.Split(resource.Value.Type.Value, ":")[0]
+		// this section creates a gjson raw value for infracost to search thru.
+		// make a local map and range entries
+		var localInputs = resource.Value.Properties.Entries
+		var foo, ok = localInputs[0].Value.(*ast.StringExpr)
 		localInputs["urn"] = step.URN
 		localInputs["config"] = t.Config
 		localInputs["dependencies"] = step.NewState.Dependencies
