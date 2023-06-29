@@ -31,10 +31,10 @@ func (p *TemplateProvider) DisplayType() string {
 }
 
 func (p *TemplateProvider) AddMetadata(metadata *schema.ProjectMetadata) {
-	// no op
+	metadata.ConfigSha = p.ctx.ProjectConfig.ConfigSha
 }
 
-func (p *TemplateProvider) LoadResources(usage map[string]*schema.UsageData) ([]*schema.Project, error) {
+func (p *TemplateProvider) LoadResources(usage schema.UsageMap) ([]*schema.Project, error) {
 	template, err := goformation.Open(p.Path)
 	if err != nil {
 		return []*schema.Project{}, errors.Wrap(err, "Error reading CloudFormation template file")
@@ -43,7 +43,10 @@ func (p *TemplateProvider) LoadResources(usage map[string]*schema.UsageData) ([]
 	metadata := config.DetectProjectMetadata(p.ctx.ProjectConfig.Path)
 	metadata.Type = p.Type()
 	p.AddMetadata(metadata)
-	name := schema.GenerateProjectName(metadata, p.ctx.ProjectConfig.Name, p.ctx.RunContext.IsCloudEnabled())
+	name := p.ctx.ProjectConfig.Name
+	if name == "" {
+		name = metadata.GenerateProjectName(p.ctx.RunContext.VCSMetadata.Remote, p.ctx.RunContext.IsCloudEnabled())
+	}
 
 	project := schema.NewProject(name, metadata)
 	parser := NewParser(p.ctx)

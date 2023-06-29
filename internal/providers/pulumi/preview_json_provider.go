@@ -37,7 +37,7 @@ func (p *PreviewJSONProvider) AddMetadata(metadata *schema.ProjectMetadata) {
 	// no op
 }
 
-func (p *PreviewJSONProvider) LoadResources(usage map[string]*schema.UsageData) ([]*schema.Project, error) {
+func (p *PreviewJSONProvider) LoadResources(usage schema.UsageMap) ([]*schema.Project, error) {
 	b, err := os.ReadFile(p.Path)
 	if err != nil {
 		return []*schema.Project{}, errors.Wrap(err, "Error reading Pulumi preview JSON file")
@@ -53,7 +53,7 @@ func (p *PreviewJSONProvider) LoadResources(usage map[string]*schema.UsageData) 
 	metadata := config.DetectProjectMetadata(p.ctx.ProjectConfig.Path)
 	metadata.Type = p.Type()
 	p.AddMetadata(metadata)
-	name := schema.GenerateProjectName(metadata, p.ctx.ProjectConfig.Name, p.ctx.RunContext.IsCloudEnabled())
+	name := metadata.GenerateProjectName(p.ctx.RunContext.VCSMetadata.Remote, p.ctx.RunContext.IsCloudEnabled())
 
 	project := schema.NewProject(name, metadata)
 	parser := NewParser(p.ctx)
@@ -62,11 +62,11 @@ func (p *PreviewJSONProvider) LoadResources(usage map[string]*schema.UsageData) 
 		return []*schema.Project{project}, errors.Wrap(err, "Error parsing Pulumi preview JSON file")
 	}
 
-	project.PastResources = pastResources
-	project.Resources = resources
+	project.PartialPastResources = pastResources
+	project.PartialResources = resources
 
 	if !p.includePastResources {
-		project.PastResources = nil
+		project.PartialPastResources = nil
 	}
 
 	return []*schema.Project{project}, nil

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	goversion "github.com/hashicorp/go-version"
@@ -49,18 +50,20 @@ type RegistryURL struct {
 type Disco struct {
 	disco  *disco.Disco
 	logger *logrus.Entry
+
+	locks sync.Map
 }
 
 // NewDisco returns a Disco with the provided credentialsSource initialising the underlying Terraform Disco.
 // If Credentials are nil then all registry requests will be unauthed.
-func NewDisco(credentialsSource auth.CredentialsSource, logger *logrus.Entry) Disco {
-	return Disco{disco: disco.NewWithCredentialsSource(credentialsSource), logger: logger}
+func NewDisco(credentialsSource auth.CredentialsSource, logger *logrus.Entry) *Disco {
+	return &Disco{disco: disco.NewWithCredentialsSource(credentialsSource), logger: logger}
 }
 
 // ModuleLocation performs a discovery lookup for the given source and returns a RegistryURL with the real
 // url of the module source and any required Credential information. It returns false if the module location
 // is not recognised as a registry module.
-func (d Disco) ModuleLocation(source string) (RegistryURL, bool, error) {
+func (d *Disco) ModuleLocation(source string) (RegistryURL, bool, error) {
 	// So we expect them to only have 3 or 4 parts depending on if they explicitly specify the registry
 	parts := strings.Split(source, "/")
 	if len(parts) != 4 {
@@ -68,8 +71,19 @@ func (d Disco) ModuleLocation(source string) (RegistryURL, bool, error) {
 	}
 
 	host, namespace, moduleName, target := parts[0], parts[1], parts[2], parts[3]
+	hostname, err := svchost.ForComparison(host)
+	if err != nil {
+		return RegistryURL{}, false, fmt.Errorf("unable to use user-provided module host %s as a Hostname for credential discovery: %w", host, err)
+	}
 
-	serviceURL, err := d.disco.DiscoverServiceURL(svchost.Hostname(host), moduleServiceID)
+	// lock the hostname to check credentials for as the underlying Terraform disco isn't concurrent safe and panics
+	// with a concurrent map write error
+	value, _ := d.locks.LoadOrStore(hostname, &sync.Mutex{})
+	lock := value.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	serviceURL, err := d.disco.DiscoverServiceURL(hostname, moduleServiceID)
 	if err != nil {
 		return RegistryURL{}, false, fmt.Errorf("unable to discover registry service using host %s %w", host, err)
 	}
@@ -80,7 +94,7 @@ func (d Disco) ModuleLocation(source string) (RegistryURL, bool, error) {
 		RawSource: source,
 	}
 
-	c, err := d.disco.CredentialsForHost(svchost.Hostname(host))
+	c, err := d.disco.CredentialsForHost(hostname)
 	if err != nil {
 		return r, true, fmt.Errorf("unable to retrieve credentials for registry host %s %w", host, err)
 	}
@@ -89,8 +103,13 @@ func (d Disco) ModuleLocation(source string) (RegistryURL, bool, error) {
 	return r, true, nil
 }
 
-func (d Disco) DownloadLocation(moduleURL RegistryURL, version string) (string, error) {
-	serviceURL, err := d.disco.DiscoverServiceURL(svchost.Hostname(moduleURL.Host), moduleServiceID)
+func (d *Disco) DownloadLocation(moduleURL RegistryURL, version string) (string, error) {
+	hostname, err := svchost.ForComparison(moduleURL.Host)
+	if err != nil {
+		return "", fmt.Errorf("unable to use module URL %s as a Hostname to discover service URL: %w", moduleURL, err)
+	}
+
+	serviceURL, err := d.disco.DiscoverServiceURL(hostname, moduleServiceID)
 	if err != nil {
 		return "", fmt.Errorf("unable to discover registry service using host %s %w", moduleURL.Host, err)
 	}
@@ -143,12 +162,12 @@ func (d Disco) DownloadLocation(moduleURL RegistryURL, version string) (string, 
 // RegistryLoader is a loader that can lookup modules from a Terraform Registry and download them to the given destination
 type RegistryLoader struct {
 	packageFetcher *PackageFetcher
-	disco          Disco
+	disco          *Disco
 	logger         *logrus.Entry
 }
 
 // NewRegistryLoader constructs a registry loader
-func NewRegistryLoader(packageFetcher *PackageFetcher, disco Disco, logger *logrus.Entry) *RegistryLoader {
+func NewRegistryLoader(packageFetcher *PackageFetcher, disco *Disco, logger *logrus.Entry) *RegistryLoader {
 	return &RegistryLoader{
 		packageFetcher: packageFetcher,
 		disco:          disco,

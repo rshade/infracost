@@ -1,22 +1,23 @@
 {
   "version": "0.2",
+  "metadata": {
+    "infracostCommand": "breakdown",
+    "vcsBranch": "stub-branch",
+    "vcsCommitSha": "stub-sha",
+    "vcsCommitAuthorName": "stub-author",
+    "vcsCommitAuthorEmail": "stub@stub.com",
+    "vcsCommitTimestamp": "REPLACED_TIME",
+    "vcsCommitMessage": "stub-message",
+    "vcsRepositoryUrl": "https://github.com/infracost/infracost"
+  },
   "currency": "USD",
   "projects": [
     {
       "name": "infracost/infracost/cmd/infracost/testdata/example_plan.json",
       "metadata": {
         "path": "./testdata/example_plan.json",
-        "infracostCommand": "breakdown",
         "type": "terraform_plan_json",
-        "branch": "stub-branch",
-        "commit": "stub-sha",
-        "commitAuthorName": "stub-author",
-        "commitAuthorEmail": "stub@stub.com",
-        "commitTimestamp": "REPLACED_TIME",
-        "commitMessage": "stub-message",
-        "vcsRepoUrl": "https://github.com/infracost/infracost",
-        "vcsSubPath": "cmd/infracost/testdata/example_plan.json",
-        "vcsPullRequestUrl": "NOT_APPLICABLE"
+        "vcsSubPath": "cmd/infracost/testdata/example_plan.json"
       },
       "pastBreakdown": {
         "resources": [],
@@ -27,6 +28,7 @@
         "resources": [
           {
             "name": "aws_instance.web_app",
+            "resourceType": "aws_instance",
             "metadata": {},
             "hourlyCost": "1.017315068493150679",
             "monthlyCost": "742.64",
@@ -89,6 +91,7 @@
           },
           {
             "name": "aws_instance.zero_cost_instance",
+            "resourceType": "aws_instance",
             "metadata": {},
             "hourlyCost": "0.249315068493150679",
             "monthlyCost": "182",
@@ -151,6 +154,7 @@
           },
           {
             "name": "aws_lambda_function.hello_world",
+            "resourceType": "aws_lambda_function",
             "metadata": {},
             "hourlyCost": "0.59817465753424657534316749",
             "monthlyCost": "436.6675",
@@ -165,18 +169,37 @@
                 "monthlyCost": "20"
               },
               {
-                "name": "Duration",
+                "name": "Ephemeral storage",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000000309",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (first 6B)",
                 "unit": "GB-seconds",
                 "hourlyQuantity": "34246.5753424657534247",
                 "monthlyQuantity": "25000000",
                 "price": "0.0000166667",
                 "hourlyCost": "0.57077739726027397260344749",
                 "monthlyCost": "416.6675"
+              },
+              {
+                "name": "Duration (over 15B)",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000133334",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
               }
             ]
           },
           {
             "name": "aws_lambda_function.zero_cost_lambda",
+            "resourceType": "aws_lambda_function",
             "metadata": {},
             "hourlyCost": "0",
             "monthlyCost": "0",
@@ -191,11 +214,29 @@
                 "monthlyCost": "0"
               },
               {
-                "name": "Duration",
+                "name": "Ephemeral storage",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000000309",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (first 6B)",
                 "unit": "GB-seconds",
                 "hourlyQuantity": "0",
                 "monthlyQuantity": "0",
                 "price": "0.0000166667",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (over 15B)",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000133334",
                 "hourlyCost": "0",
                 "monthlyCost": "0"
               }
@@ -203,6 +244,7 @@
           },
           {
             "name": "aws_s3_bucket.usage",
+            "resourceType": "aws_s3_bucket",
             "metadata": {},
             "hourlyCost": "0",
             "monthlyCost": "0",
@@ -270,6 +312,7 @@
         "resources": [
           {
             "name": "aws_instance.web_app",
+            "resourceType": "aws_instance",
             "metadata": {},
             "hourlyCost": "1.017315068493150679",
             "monthlyCost": "742.64",
@@ -332,6 +375,7 @@
           },
           {
             "name": "aws_instance.zero_cost_instance",
+            "resourceType": "aws_instance",
             "metadata": {},
             "hourlyCost": "0.249315068493150679",
             "monthlyCost": "182",
@@ -394,6 +438,7 @@
           },
           {
             "name": "aws_lambda_function.hello_world",
+            "resourceType": "aws_lambda_function",
             "metadata": {},
             "hourlyCost": "0.59817465753424657534316749",
             "monthlyCost": "436.6675",
@@ -408,18 +453,37 @@
                 "monthlyCost": "20"
               },
               {
-                "name": "Duration",
+                "name": "Ephemeral storage",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000000309",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (first 6B)",
                 "unit": "GB-seconds",
                 "hourlyQuantity": "34246.5753424657534247",
                 "monthlyQuantity": "25000000",
                 "price": "0.0000166667",
                 "hourlyCost": "0.57077739726027397260344749",
                 "monthlyCost": "416.6675"
+              },
+              {
+                "name": "Duration (over 15B)",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000133334",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
               }
             ]
           },
           {
             "name": "aws_lambda_function.zero_cost_lambda",
+            "resourceType": "aws_lambda_function",
             "metadata": {},
             "hourlyCost": "0",
             "monthlyCost": "0",
@@ -434,11 +498,29 @@
                 "monthlyCost": "0"
               },
               {
-                "name": "Duration",
+                "name": "Ephemeral storage",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000000309",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (first 6B)",
                 "unit": "GB-seconds",
                 "hourlyQuantity": "0",
                 "monthlyQuantity": "0",
                 "price": "0.0000166667",
+                "hourlyCost": "0",
+                "monthlyCost": "0"
+              },
+              {
+                "name": "Duration (over 15B)",
+                "unit": "GB-seconds",
+                "hourlyQuantity": "0",
+                "monthlyQuantity": "0",
+                "price": "0.0000133334",
                 "hourlyCost": "0",
                 "monthlyCost": "0"
               }
@@ -446,6 +528,7 @@
           },
           {
             "name": "aws_s3_bucket.usage",
+            "resourceType": "aws_s3_bucket",
             "metadata": {},
             "hourlyCost": "0",
             "monthlyCost": "0",

@@ -14,9 +14,10 @@ const (
 	sqlMIProductFamily = "Databases"
 )
 
+// *** this resource is deprecated in v3.0 of AzureRM provider and will be removed in v4.0 ***
 // SQLManagedInstance struct represents an azure Sql Managed Instance.
 //
-// SQLManagedInstance currently only Gen5 database instance
+// # SQLManagedInstance currently only Gen5 database instance
 //
 // More resource information here: https://azure.microsoft.com/en-gb/products/azure-sql/managed-instance/
 // Pricing information here: https://azure.microsoft.com/en-gb/pricing/details/azure-sql-managed-instance/single/
@@ -24,14 +25,14 @@ type SQLManagedInstance struct {
 	Address            string
 	Region             string
 	SKU                string
-	LicenceType        string
+	LicenseType        string
 	Cores              int64
 	StorageSizeInGb    int64
 	StorageAccountType string
 	// LongTermRetentionStorageGB defines a usage param that allows users to define how many gb of cold storage the database uses.
 	// This is storage that can be kept for up to 10 years.
 	LongTermRetentionStorageGB *int64 `infracost_usage:"long_term_retention_storage_gb"`
-	BackupStorageGb            *int64 `infracost_usage:"backup_storage_gb"`
+	BackupStorageGB            *int64 `infracost_usage:"backup_storage_gb"`
 }
 
 // PopulateUsage parses the u schema.UsageData into the SQLManagedInstance.
@@ -79,7 +80,7 @@ func (r *SQLManagedInstance) costComponents() []*schema.CostComponent {
 
 	costComponents = append(costComponents, r.sqlMIStorageCostComponent(), r.sqlMIBackupCostComponent())
 
-	if r.LicenceType == "LicenseIncluded" {
+	if r.LicenseType == "LicenseIncluded" {
 		costComponents = append(costComponents, r.sqlMILicenseCostComponent())
 	}
 
@@ -123,7 +124,7 @@ func (r *SQLManagedInstance) sqlMIStorageCostComponent() *schema.CostComponent {
 			ProductFamily: strPtr(sqlMIProductFamily),
 			AttributeFilters: ([]*schema.AttributeFilter{
 				{Key: "productName", Value: strPtr("SQL Managed Instance General Purpose - Storage")},
-				{Key: "meterName", Value: strPtr("Data Stored")},
+				{Key: "meterName", ValueRegex: regexPtr("Data Stored$")},
 			}),
 		},
 		PriceFilter: priceFilterConsumption,
@@ -133,12 +134,12 @@ func (r *SQLManagedInstance) sqlMIStorageCostComponent() *schema.CostComponent {
 func (r *SQLManagedInstance) sqlMIBackupCostComponent() *schema.CostComponent {
 	var backup *decimal.Decimal
 
-	if r.BackupStorageGb != nil {
-		backup = decimalPtr(decimal.NewFromInt(*r.BackupStorageGb))
+	if r.BackupStorageGB != nil {
+		backup = decimalPtr(decimal.NewFromInt(*r.BackupStorageGB))
 	}
 
 	return &schema.CostComponent{
-		Name:            fmt.Sprintf("PITR Backup storage (%s)", r.StorageAccountType),
+		Name:            fmt.Sprintf("PITR backup storage (%s)", r.StorageAccountType),
 		Unit:            "GB",
 		UnitMultiplier:  decimal.NewFromInt(1),
 		MonthlyQuantity: backup,
@@ -169,6 +170,7 @@ func (r *SQLManagedInstance) sqlMILicenseCostComponent() *schema.CostComponent {
 			ProductFamily: strPtr(sqlMIProductFamily),
 			AttributeFilters: []*schema.AttributeFilter{
 				{Key: "productName", Value: strPtr("SQL Managed Instance General Purpose - SQL License")},
+				{Key: "meterName", Value: strPtr("vCore")},
 			},
 		},
 		PriceFilter: priceFilterConsumption,
@@ -183,7 +185,7 @@ func (r *SQLManagedInstance) sqlMILongTermRetentionStorageGBCostComponent() *sch
 	}
 
 	return &schema.CostComponent{
-		Name:            fmt.Sprintf("LTR Backup Storage (%s)", r.StorageAccountType),
+		Name:            fmt.Sprintf("LTR backup storage (%s)", r.StorageAccountType),
 		Unit:            "GB",
 		UnitMultiplier:  decimal.NewFromInt(1),
 		MonthlyQuantity: retention,
@@ -194,7 +196,7 @@ func (r *SQLManagedInstance) sqlMILongTermRetentionStorageGBCostComponent() *sch
 			ProductFamily: strPtr(sqlMIProductFamily),
 			AttributeFilters: []*schema.AttributeFilter{
 				{Key: "productName", Value: strPtr("SQL Managed Instance - LTR Backup Storage")},
-				{Key: "meterName", Value: strPtr(fmt.Sprintf("Backup %s Data Stored", r.StorageAccountType))},
+				{Key: "meterName", Value: strPtr(fmt.Sprintf("LTR Backup %s Data Stored", r.StorageAccountType))},
 			},
 		},
 		PriceFilter: priceFilterConsumption,

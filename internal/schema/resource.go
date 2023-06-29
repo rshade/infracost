@@ -8,13 +8,19 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-var HourToMonthUnitMultiplier = decimal.NewFromInt(730)
+var (
+	HourToMonthUnitMultiplier = decimal.NewFromInt(730)
+	MonthToHourUnitMultiplier = decimal.NewFromInt(1).Div(HourToMonthUnitMultiplier)
+	DaysInMonth               = HourToMonthUnitMultiplier.DivRound(decimal.NewFromInt(24), 24)
+	DayToMonthUnitMultiplier  = DaysInMonth.DivRound(HourToMonthUnitMultiplier, 24)
+)
 
 type ResourceFunc func(*ResourceData, *UsageData) *Resource
 
 type Resource struct {
 	Name              string
 	CostComponents    []*CostComponent
+	ActualCosts       []*ActualCosts
 	SubResources      []*Resource
 	HourlyCost        *decimal.Decimal
 	MonthlyCost       *decimal.Decimal

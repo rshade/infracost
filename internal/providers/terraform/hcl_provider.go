@@ -1,38 +1,46 @@
 package terraform
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
+	"sort"
 	"strings"
+	"sync"
 
+	jsoniter "github.com/json-iterator/go"
 	log "github.com/sirupsen/logrus"
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/gocty"
 	ctyJson "github.com/zclconf/go-cty/cty/json"
 
+	"github.com/infracost/infracost/internal/apiclient"
+	"github.com/infracost/infracost/internal/clierror"
 	"github.com/infracost/infracost/internal/config"
 	"github.com/infracost/infracost/internal/hcl"
 	"github.com/infracost/infracost/internal/hcl/modules"
 	"github.com/infracost/infracost/internal/logging"
+	"github.com/infracost/infracost/internal/prices"
+	"github.com/infracost/infracost/internal/scan"
 	"github.com/infracost/infracost/internal/schema"
 	"github.com/infracost/infracost/internal/ui"
 )
 
 type HCLProvider struct {
+	scanner        *scan.TerraformPlanScanner
 	parsers        []*hcl.Parser
 	planJSONParser *Parser
 	logger         *log.Entry
 
-	schema      *PlanSchema
-	providerKey string
-	ctx         *config.ProjectContext
-	cache       []*hcl.Module
-	config      HCLProviderConfig
+	schema *PlanSchema
+	ctx    *config.ProjectContext
+	cache  []HCLProject
+	config HCLProviderConfig
 }
 
 type HCLProviderConfig struct {
@@ -119,17 +127,45 @@ func NewHCLProvider(ctx *config.ProjectContext, config *HCLProviderConfig, opts 
 			localWorkspace),
 		)
 	}
-	options = append(options, hcl.OptionWithCredentialsSource(credsSource))
+
+	options = append(options,
+		hcl.OptionWithTerraformWorkspace(localWorkspace),
+	)
 
 	logger := ctx.Logger().WithFields(log.Fields{"provider": "terraform_dir"})
-	parsers, err := hcl.LoadParsers(ctx.ProjectConfig.Path, ctx.ProjectConfig.ExcludePaths, logger, options...)
+	runCtx := ctx.RunContext
+	locatorConfig := &hcl.ProjectLocatorConfig{ExcludedSubDirs: ctx.ProjectConfig.ExcludePaths, ChangedObjects: runCtx.VCSMetadata.Commit.ChangedObjects, UseAllPaths: ctx.ProjectConfig.IncludeAllPaths}
+
+	cachePath := ctx.RunContext.Config.CachePath()
+	initialPath := ctx.ProjectConfig.Path
+	if filepath.IsAbs(cachePath) {
+		abs, err := filepath.Abs(initialPath)
+		if err != nil {
+			logger.WithError(err).Warnf("could not make project path absolute to match provided --config-file/--path path absolute, this will result in module loading failures")
+		} else {
+			initialPath = abs
+		}
+	}
+	loader := modules.NewModuleLoader(cachePath, credsSource, ctx.RunContext.Config.TerraformSourceMap, logger, ctx.RunContext.ModuleMutex)
+	parsers, err := hcl.LoadParsers(
+		initialPath,
+		loader,
+		locatorConfig,
+		logger,
+		options...,
+	)
 	if err != nil {
 		return nil, err
 	}
+	var scanner *scan.TerraformPlanScanner
+	if runCtx.Config.PolicyAPIEndpoint != "" {
+		scanner = scan.NewTerraformPlanScanner(runCtx, ctx.Logger(), prices.GetPrices)
+	}
 
 	return &HCLProvider{
+		scanner:        scanner,
 		parsers:        parsers,
-		planJSONParser: NewParser(ctx, false),
+		planJSONParser: NewParser(ctx, true),
 		ctx:            ctx,
 		config:         *config,
 		logger:         logger,
@@ -139,6 +175,8 @@ func NewHCLProvider(ctx *config.ProjectContext, config *HCLProviderConfig, opts 
 func (p *HCLProvider) Type() string        { return "terraform_dir" }
 func (p *HCLProvider) DisplayType() string { return "Terraform directory" }
 func (p *HCLProvider) AddMetadata(metadata *schema.ProjectMetadata) {
+	metadata.ConfigSha = p.ctx.ProjectConfig.ConfigSha
+
 	basePath := p.ctx.ProjectConfig.Path
 	if p.ctx.RunContext.Config.ConfigFilePath != "" {
 		basePath = filepath.Dir(p.ctx.RunContext.Config.ConfigFilePath)
@@ -156,97 +194,190 @@ func (p *HCLProvider) AddMetadata(metadata *schema.ProjectMetadata) {
 // LoadResources calls a hcl.Parser to parse the directory config files into hcl.Blocks. It then builds a shallow
 // representation of the terraform plan JSON files from these Blocks, this is passed to the PlanJSONProvider.
 // The PlanJSONProvider uses this shallow representation to actually load Infracost resources.
-func (p *HCLProvider) LoadResources(usage map[string]*schema.UsageData) ([]*schema.Project, error) {
-	jsons, err := p.LoadPlanJSONs()
-	if err != nil {
-		return nil, err
-	}
+func (p *HCLProvider) LoadResources(usage schema.UsageMap) ([]*schema.Project, error) {
+	jsons := p.LoadPlanJSONs()
 
 	var projects = make([]*schema.Project, len(jsons))
 	for i, j := range jsons {
-		project, err := p.parseResources(j.path, j.json, usage)
-		if err != nil {
-			return nil, err
+		if j.Error != nil {
+			projects[i] = p.newProject(j)
+			continue
 		}
 
+		project := p.parseResources(j, usage)
+		if p.ctx.RunContext.VCSMetadata.HasChanges() {
+			project.Metadata.VCSCodeChanged = &j.Module.HasChanges
+		}
+
+		if p.scanner != nil {
+			err := p.scanner.ScanPlan(project)
+			if err != nil {
+				p.logger.WithError(err).Debugf("failed to scan Terraform project %s", project.Name)
+			}
+		}
 		projects[i] = project
 	}
 
 	return projects, nil
 }
 
-func (p *HCLProvider) parseResources(path string, j []byte, usage map[string]*schema.UsageData) (*schema.Project, error) {
-	metadata := config.DetectProjectMetadata(path)
-	metadata.Type = p.Type()
-	p.AddMetadata(metadata)
-	name := schema.GenerateProjectName(metadata, p.ctx.ProjectConfig.Name, p.ctx.RunContext.IsCloudEnabled())
+func (p *HCLProvider) parseResources(parsed HCLProject, usage schema.UsageMap) *schema.Project {
+	project := p.newProject(parsed)
 
-	project := schema.NewProject(name, metadata)
-
-	pastResources, resources, err := p.planJSONParser.parseJSON(j, usage)
+	partialPastResources, partialResources, err := p.planJSONParser.parseJSON(parsed.JSON, usage)
 	if err != nil {
-		return project, fmt.Errorf("Error parsing Terraform plan JSON file %w", err)
+		project.Metadata.AddErrorWithCode(err, schema.DiagJSONParsingFailure)
+
+		return project
 	}
 
-	project.PastResources = pastResources
-	project.Resources = resources
+	project.PartialPastResources = partialPastResources
+	project.PartialResources = partialResources
 
-	return project, nil
+	return project
 }
 
-type hclProject struct {
-	path string
-	json []byte
+func (p *HCLProvider) newProject(parsed HCLProject) *schema.Project {
+	metadata := config.DetectProjectMetadata(parsed.Module.RootPath)
+	metadata.Type = p.Type()
+	p.AddMetadata(metadata)
+
+	if parsed.Error != nil {
+		metadata.AddErrorWithCode(parsed.Error, schema.DiagModuleEvaluationFailure)
+	}
+
+	if len(parsed.Module.Warnings) > 0 {
+		warnings := make([]schema.ProjectDiag, len(parsed.Module.Warnings))
+
+		for i, warning := range parsed.Module.Warnings {
+			warnings[i] = schema.ProjectDiag{
+				Code:    int(warning.Code),
+				Message: warning.Title,
+				Data:    warning.Data,
+			}
+
+			if p.ctx.RunContext.Config.IsLogging() {
+				logging.Logger.Warn(warning.FriendlyMessage)
+			} else {
+				ui.PrintWarning(p.ctx.RunContext.ErrWriter, warning.FriendlyMessage)
+			}
+		}
+
+		metadata.Warnings = warnings
+	}
+
+	name := p.ctx.ProjectConfig.Name
+	if name == "" {
+		name = metadata.GenerateProjectName(p.ctx.RunContext.VCSMetadata.Remote, p.ctx.RunContext.IsCloudEnabled())
+	}
+
+	return schema.NewProject(name, metadata)
+}
+
+type HCLProject struct {
+	JSON   []byte
+	Module *hcl.Module
+	Error  error
 }
 
 // LoadPlanJSONs parses the found directories and return the blocks in Terraform plan JSON format.
-func (p *HCLProvider) LoadPlanJSONs() ([]hclProject, error) {
-	var jsons = make([]hclProject, len(p.parsers))
-	modules, err := p.Modules()
-	if err != nil {
-		return nil, err
-	}
+func (p *HCLProvider) LoadPlanJSONs() []HCLProject {
+	var jsons = make([]HCLProject, len(p.parsers))
+	mods := p.Modules()
 
-	for i, module := range modules {
-		b, err := p.modulesToPlanJSON(module)
-		if err != nil {
-			return nil, err
+	for i, module := range mods {
+		if module.Error == nil {
+			b, err := p.modulesToPlanJSON(module.Module)
+			if err != nil {
+				module.Error = err
+			} else {
+				module.JSON = b
+			}
+
 		}
 
-		jsons[i] = hclProject{json: b, path: module.RootPath}
+		jsons[i] = module
 	}
 
-	return jsons, nil
+	return jsons
 }
 
 // Modules parses the found directories into hcl modules representing a config tree of Terraform information.
 // Modules returns the raw hcl blocks associated with each found Terraform project. This can be used
 // to fetch raw information like outputs, vars, resources, e.t.c.
-func (p *HCLProvider) Modules() ([]*hcl.Module, error) {
+func (p *HCLProvider) Modules() []HCLProject {
 	if p.cache != nil {
-		return p.cache, nil
+		return p.cache
 	}
 
-	var modules = make([]*hcl.Module, len(p.parsers))
+	runCtx := p.ctx.RunContext
+	parallelism, _ := runCtx.GetParallelism()
 
-	for i, parser := range p.parsers {
-		if len(p.parsers) > 1 && !p.config.SuppressLogging {
-			fmt.Fprintf(os.Stderr, "Detected Terraform project at %s\n", ui.DisplayPath(parser.Path()))
-		}
-
-		module, err := parser.ParseDirectory()
-		if err != nil {
-			return nil, err
-		}
-
-		modules[i] = module
+	numJobs := len(p.parsers)
+	runInParallel := parallelism > 1 && numJobs > 1
+	if runInParallel && !runCtx.Config.IsLogging() {
+		// set the config level to info so that the spinners don't report to the console.
+		p.ctx.RunContext.Config.LogLevel = "info"
 	}
+
+	if numJobs < parallelism {
+		parallelism = numJobs
+	}
+
+	ch := make(chan *hcl.Parser, numJobs)
+	mods := make([]HCLProject, 0, numJobs)
+	mu := &sync.Mutex{}
+	wg := &sync.WaitGroup{}
+
+	for _, parser := range p.parsers {
+		ch <- parser
+	}
+	close(ch)
+	wg.Add(parallelism)
+
+	for i := 0; i < parallelism; i++ {
+		go func() {
+			defer func() {
+				wg.Done()
+			}()
+
+			for parser := range ch {
+				if numJobs > 1 && !p.config.SuppressLogging {
+					fmt.Fprintf(os.Stderr, "Detected Terraform project at %s\n", ui.DisplayPath(parser.Path()))
+				}
+
+				module, modErr := parser.ParseDirectory()
+				if modErr != nil {
+					if v, ok := modErr.(*clierror.PanicError); ok {
+						err := apiclient.ReportCLIError(p.ctx.RunContext, v, false)
+						if err != nil {
+							p.logger.WithError(err).Debug("error sending unexpected runtime error")
+						}
+					}
+				}
+
+				mu.Lock()
+				mods = append(mods, HCLProject{Module: module, Error: modErr})
+				mu.Unlock()
+			}
+		}()
+	}
+
+	wg.Wait()
 
 	if p.config.CacheParsingModules {
-		p.cache = modules
+		p.cache = mods
 	}
 
-	return modules, nil
+	sort.Slice(mods, func(i, j int) bool {
+		if mods[i].Module.Name != "" && mods[j].Module.Name != "" {
+			return mods[i].Module.Name < mods[j].Module.Name
+		}
+
+		return mods[i].Module.ModulePath < mods[j].Module.ModulePath
+	})
+
+	return mods
 }
 
 // InvalidateCache removes the module cache from the prior hcl parse.
@@ -261,15 +392,23 @@ func (p *HCLProvider) newPlanSchema() {
 		FormatVersion:    "1.0",
 		TerraformVersion: "1.1.0",
 		Variables:        nil,
-		PlannedValues: struct {
-			RootModule PlanModule `json:"root_module"`
+		PriorState: struct {
+			Values PlanValues `json:"values"`
 		}{
+			Values: PlanValues{
+				RootModule: PlanModule{
+					Resources:    []ResourceJSON{},
+					ChildModules: []PlanModule{},
+				},
+			},
+		},
+		InfracostResourceChanges: []ResourceChangesJSON{},
+		PlannedValues: PlanValues{
 			RootModule: PlanModule{
 				Resources:    []ResourceJSON{},
 				ChildModules: []PlanModule{},
 			},
 		},
-		ResourceChanges: []ResourceChangesJSON{},
 		Configuration: Configuration{
 			ProviderConfig: make(map[string]ProviderConfig),
 			RootModule: ModuleConfig{
@@ -278,8 +417,6 @@ func (p *HCLProvider) newPlanSchema() {
 			},
 		},
 	}
-
-	p.providerKey = ""
 }
 
 func (p *HCLProvider) modulesToPlanJSON(rootModule *hcl.Module) ([]byte, error) {
@@ -287,12 +424,14 @@ func (p *HCLProvider) modulesToPlanJSON(rootModule *hcl.Module) ([]byte, error) 
 
 	mo := p.marshalModule(rootModule)
 	p.schema.Configuration.RootModule = mo.ModuleConfig
+	p.schema.PriorState.Values.RootModule = mo.PlanModule
 	p.schema.PlannedValues.RootModule = mo.PlanModule
 
 	b, err := json.MarshalIndent(p.schema, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("error handling built plan json from hcl %w", err)
 	}
+
 	return b, nil
 }
 
@@ -323,8 +462,7 @@ func (p *HCLProvider) marshalModule(module *hcl.Module) ModuleOut {
 			}
 
 			planModule.Resources = append(planModule.Resources, out.Planned)
-
-			p.schema.ResourceChanges = append(p.schema.ResourceChanges, out.Changes)
+			p.schema.InfracostResourceChanges = append(p.schema.InfracostResourceChanges, out.Changes)
 		}
 	}
 
@@ -349,16 +487,22 @@ func (p *HCLProvider) marshalModule(module *hcl.Module) ModuleOut {
 }
 
 func (p *HCLProvider) getResourceOutput(block *hcl.Block) ResourceOutput {
+	jsonValues := marshalAttributeValues(block.Type(), block.Values())
+	p.marshalBlock(block, jsonValues)
+
 	planned := ResourceJSON{
 		Address:       block.FullName(),
 		Mode:          "managed",
 		Type:          block.TypeLabel(),
-		Name:          stripCount(block.NameLabel()),
+		Name:          stripCountOrForEach(block.NameLabel()),
 		Index:         block.Index(),
 		SchemaVersion: 0,
 		InfracostMetadata: map[string]interface{}{
-			"filename": block.Filename,
-			"calls":    block.CallDetails(),
+			"filename":  block.Filename,
+			"startLine": block.StartLine,
+			"endLine":   block.EndLine,
+			"calls":     block.CallDetails(),
+			"checksum":  generateChecksum(jsonValues),
 		},
 	}
 
@@ -367,20 +511,18 @@ func (p *HCLProvider) getResourceOutput(block *hcl.Block) ResourceOutput {
 		ModuleAddress: newString(block.ModuleAddress()),
 		Mode:          "managed",
 		Type:          block.TypeLabel(),
-		Name:          stripCount(block.NameLabel()),
+		Name:          stripCountOrForEach(block.NameLabel()),
 		Index:         block.Index(),
 		Change: ResourceChange{
 			Actions: []string{"create"},
 		},
 	}
 
-	jsonValues := marshalAttributeValues(block.Type(), block.Values())
-	marshalBlock(block, jsonValues)
-
-	changes.Change.After = jsonValues
 	planned.Values = jsonValues
+	changes.Change.After = jsonValues
 
-	providerConfigKey := p.providerKey
+	providerConfigKey := strings.Split(block.TypeLabel(), "_")[0]
+
 	providerAttr := block.GetAttribute("provider")
 	if providerAttr != nil {
 		r, err := providerAttr.Reference()
@@ -397,20 +539,20 @@ func (p *HCLProvider) getResourceOutput(block *hcl.Block) ResourceOutput {
 	var configuration ResourceData
 	if block.HasModuleBlock() {
 		configuration = ResourceData{
-			Address:           stripCount(block.LocalName()),
+			Address:           stripCountOrForEach(block.LocalName()),
 			Mode:              "managed",
 			Type:              block.TypeLabel(),
-			Name:              stripCount(block.NameLabel()),
+			Name:              stripCountOrForEach(block.NameLabel()),
 			ProviderConfigKey: block.ModuleName() + ":" + block.Provider(),
 			Expressions:       blockToReferences(block),
 			CountExpression:   p.countReferences(block),
 		}
 	} else {
 		configuration = ResourceData{
-			Address:           stripCount(block.FullName()),
+			Address:           stripCountOrForEach(block.FullName()),
 			Mode:              "managed",
 			Type:              block.TypeLabel(),
-			Name:              stripCount(block.NameLabel()),
+			Name:              stripCountOrForEach(block.NameLabel()),
 			ProviderConfigKey: providerConfigKey,
 			Expressions:       blockToReferences(block),
 			CountExpression:   p.countReferences(block),
@@ -419,6 +561,7 @@ func (p *HCLProvider) getResourceOutput(block *hcl.Block) ResourceOutput {
 
 	return ResourceOutput{
 		Planned:       planned,
+		PriorState:    planned,
 		Changes:       changes,
 		Configuration: configuration,
 	}
@@ -439,10 +582,6 @@ func (p *HCLProvider) marshalProviderBlock(block *hcl.Block) string {
 				"constant_value": region,
 			},
 		},
-	}
-
-	if p.providerKey == "" {
-		p.providerKey = name
 	}
 
 	return name
@@ -469,24 +608,34 @@ func (p *HCLProvider) countReferences(block *hcl.Block) *countExpression {
 			return &exp
 		}
 
-		v := attribute.Value()
-		ty := v.Type()
-		var i int64
-		switch ty {
-		case cty.Number:
-			i, _ = v.AsBigFloat().Int64()
-		case cty.String:
-			s := v.AsString()
-			i, _ = strconv.ParseInt(s, 10, 64)
-		default:
-			p.logger.Debugf("unsupported go cty type %s expected either Number or String for count expression, using 0", ty)
-		}
-
+		i := attribute.AsInt()
 		exp.ConstantValue = &i
 		return &exp
 	}
 
 	return nil
+}
+
+var ignoredAttrs = map[string]bool{"arn": true, "id": true, "name": true, "self_link": true}
+var checksumMarshaller = jsoniter.ConfigCompatibleWithStandardLibrary
+
+func generateChecksum(value map[string]interface{}) string {
+	filtered := make(map[string]interface{})
+	for k, v := range value {
+		if !ignoredAttrs[k] {
+			filtered[k] = v
+		}
+	}
+
+	serialized, err := checksumMarshaller.Marshal(filtered)
+	if err != nil {
+		return ""
+	}
+
+	h := sha256.New()
+	h.Write(serialized)
+
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 func blockToReferences(block *hcl.Block) map[string]interface{} {
@@ -530,7 +679,7 @@ func blockToReferences(block *hcl.Block) map[string]interface{} {
 	return expressionValues
 }
 
-func marshalBlock(block *hcl.Block, jsonValues map[string]interface{}) {
+func (p *HCLProvider) marshalBlock(block *hcl.Block, jsonValues map[string]interface{}) {
 	for _, b := range block.Children() {
 		key := b.Type()
 		if key == "dynamic" || key == "depends_on" {
@@ -539,10 +688,19 @@ func marshalBlock(block *hcl.Block, jsonValues map[string]interface{}) {
 
 		childValues := marshalAttributeValues(key, b.Values())
 		if len(b.Children()) > 0 {
-			marshalBlock(b, childValues)
+			p.marshalBlock(b, childValues)
 		}
 
 		if v, ok := jsonValues[key]; ok {
+			if _, ok := v.(json.RawMessage); ok {
+				p.logger.WithFields(log.Fields{
+					"parent_block": block.LocalName(),
+					"child_block":  b.LocalName(),
+				}).Debugf("skipping attribute '%s' that has also been declared as a child block", key)
+
+				continue
+			}
+
 			jsonValues[key] = append(v.([]interface{}), childValues)
 			continue
 		}
@@ -552,7 +710,7 @@ func marshalBlock(block *hcl.Block, jsonValues map[string]interface{}) {
 }
 
 func marshalAttributeValues(blockType string, value cty.Value) map[string]interface{} {
-	if value == cty.NilVal || value.IsNull() {
+	if value.IsNull() {
 		return nil
 	}
 	ret := make(map[string]interface{})
@@ -580,6 +738,7 @@ func marshalAttributeValues(blockType string, value cty.Value) map[string]interf
 type ResourceOutput struct {
 	Planned       ResourceJSON
 	Changes       ResourceChangesJSON
+	PriorState    ResourceJSON
 	Configuration ResourceData
 }
 
@@ -610,15 +769,25 @@ type ResourceChange struct {
 	After   map[string]interface{} `json:"after"`
 }
 
+type PlanValues struct {
+	RootModule PlanModule `json:"root_module"`
+}
+
 type PlanSchema struct {
 	FormatVersion    string      `json:"format_version"`
 	TerraformVersion string      `json:"terraform_version"`
 	Variables        interface{} `json:"variables,omitempty"`
-	PlannedValues    struct {
-		RootModule PlanModule `json:"root_module"`
-	} `json:"planned_values"`
-	ResourceChanges []ResourceChangesJSON `json:"resource_changes"`
-	Configuration   Configuration         `json:"configuration"`
+	PriorState       struct {
+		Values PlanValues `json:"values"`
+	} `json:"prior_state"`
+	PlannedValues PlanValues    `json:"planned_values"`
+	Configuration Configuration `json:"configuration"`
+
+	// InfracostResourceChanges is a flattened list of resource changes for the plan, this is in the format of the Terraform
+	// plan JSON output, but we omit adding it as the supported `resource_changes` key as this will cause plan inconsistencies.
+	// We copy this `infracost_resource_changes` key at a later date to `resource_changes` before sending to the Policy API.
+	// This means that we can evaluate the Rego ruleset on the known Terraform plan JSON structure.
+	InfracostResourceChanges []ResourceChangesJSON `json:"infracost_resource_changes"`
 }
 
 type PlanModule struct {
@@ -680,8 +849,8 @@ func newString(s string) *string {
 	return &s
 }
 
-var countRegex = regexp.MustCompile(`\[\d+\]$`)
+var countRegex = regexp.MustCompile(`\[.+\]$`)
 
-func stripCount(s string) string {
+func stripCountOrForEach(s string) string {
 	return countRegex.ReplaceAllString(s, "")
 }

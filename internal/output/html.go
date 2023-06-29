@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"path/filepath"
 	"strings"
 
-	"github.com/infracost/infracost/internal/ui"
 	"github.com/shopspring/decimal"
+
+	"github.com/infracost/infracost/internal/ui"
 
 	"github.com/Masterminds/sprig"
 
@@ -19,7 +21,7 @@ func ToHTML(out Root, opts Options) ([]byte, error) {
 	var buf bytes.Buffer
 	bufw := bufio.NewWriter(&buf)
 
-	tmpl := template.New("base")
+	tmpl := template.New("html.tmpl")
 	tmpl.Funcs(sprig.FuncMap())
 	tmpl.Funcs(template.FuncMap{
 		"safeHTML": func(s interface{}) template.HTML {
@@ -42,7 +44,7 @@ func ToHTML(out Root, opts Options) ([]byte, error) {
 		},
 		"filterZeroValComponents": filterZeroValComponents,
 		"filterZeroValResources":  filterZeroValResources,
-		"formatCost2DP":           func(d *decimal.Decimal) string { return formatCost2DP(out.Currency, d) },
+		"formatCost2DP":           func(d *decimal.Decimal) string { return FormatCost2DP(out.Currency, d) },
 		"formatPrice":             func(d decimal.Decimal) string { return formatPrice(out.Currency, d) },
 		"formatTitleWithCurrency": func(title string) string { return formatTitleWithCurrency(title, out.Currency) },
 		"formatQuantity":          formatQuantity,
@@ -56,7 +58,7 @@ func ToHTML(out Root, opts Options) ([]byte, error) {
 			return p.Metadata.WorkspaceLabel()
 		},
 	})
-	tmpl, err := tmpl.Parse(HTMLTemplate)
+	_, err := tmpl.ParseFS(templatesFS, filepath.Join("templates", "html.tmpl"))
 	if err != nil {
 		return []byte{}, err
 	}

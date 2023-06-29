@@ -1,5 +1,11 @@
 package hcl
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
 // ModuleCall represents a call to a defined Module by a parent Module.
 type ModuleCall struct {
 	// Name the name of the module as specified a the point of definition.
@@ -24,6 +30,76 @@ type Module struct {
 	RootPath   string
 	ModulePath string
 
-	Modules []*Module
-	Parent  *Module
+	Modules  []*Module
+	Parent   *Module
+	Warnings []Warning
+
+	HasChanges bool
+}
+
+// Index returns the count index of the Module using the name.
+// Index returns nil if the Module has no count.
+func (m *Module) Index() *int64 {
+	matches := countRegex.FindStringSubmatch(m.Name)
+
+	if len(matches) > 0 {
+		i, _ := strconv.ParseInt(matches[1], 10, 64)
+
+		return &i
+	}
+
+	return nil
+}
+
+// Key returns the foreach key of the Module using the name.
+// Key returns nil if the Module has no each key.
+func (m *Module) Key() *string {
+	matches := foreachRegex.FindStringSubmatch(m.Name)
+
+	if len(matches) > 0 {
+		return &matches[1]
+	}
+
+	return nil
+}
+
+// WarningCode is used to delineate warnings across Infracost.
+type WarningCode int
+
+const (
+	WarningMissingVars WarningCode = iota + 1
+)
+
+// Warning holds information about non-critical errors that occurred within a module evaluation.
+type Warning struct {
+	Code  WarningCode
+	Title string
+	Data  interface{}
+
+	// FriendlyMessage should be used to display a readable message to the CLI user.
+	FriendlyMessage string
+}
+
+// NewMissingVarsWarning returns a Warning using the WarningMissingVars error code. It expects that vars
+// is a list of Terraform variables that cannot be found in the evaluation context.
+func NewMissingVarsWarning(vars []string) Warning {
+	return Warning{
+		Code:  WarningMissingVars,
+		Title: "Missing Terraform vars",
+		Data:  vars,
+		FriendlyMessage: fmt.Sprintf(
+			"Input values were not provided for following Terraform variables: %s. %s",
+			joinQuotes(vars),
+			"Use --terraform-var-file or --terraform-var to specify them.",
+		),
+	}
+}
+
+func joinQuotes(elems []string) string {
+	quoted := make([]string, len(elems))
+	for i, elem := range elems {
+		quoted[i] = fmt.Sprintf("%q", elem)
+	}
+
+	return strings.Join(quoted, ", ")
 }

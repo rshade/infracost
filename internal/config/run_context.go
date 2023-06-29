@@ -2,7 +2,6 @@ package config
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -10,6 +9,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/infracost/infracost/internal/logging"
+	intSync "github.com/infracost/infracost/internal/sync"
+	"github.com/infracost/infracost/internal/vcs"
 
 	"github.com/google/uuid"
 	log "github.com/sirupsen/logrus"
@@ -23,8 +26,11 @@ type RunContext struct {
 	uuid        uuid.UUID
 	Config      *Config
 	State       *State
+	VCSMetadata vcs.Metadata
+	CMD         string
 	contextVals map[string]interface{}
 	mu          *sync.RWMutex
+	ModuleMutex *intSync.KeyMutex
 	StartTime   int64
 
 	isCommentCmd bool
@@ -53,6 +59,7 @@ func NewRunContextFromEnv(rootCtx context.Context) (*RunContext, error) {
 		State:       state,
 		contextVals: map[string]interface{}{},
 		mu:          &sync.RWMutex{},
+		ModuleMutex: &intSync.KeyMutex{},
 		StartTime:   time.Now().Unix(),
 	}
 
@@ -67,6 +74,7 @@ func EmptyRunContext() *RunContext {
 		State:       &State{},
 		contextVals: map[string]interface{}{},
 		mu:          &sync.RWMutex{},
+		ModuleMutex: &intSync.KeyMutex{},
 		StartTime:   time.Now().Unix(),
 		OutWriter:   os.Stdout,
 		ErrWriter:   os.Stderr,
@@ -78,14 +86,6 @@ var (
 	outputIndent = "  "
 )
 
-// NewWarningWriter returns a function that can be used to write a message to the RunContext.ErrWriter.
-// This can be useful to pass to functions or structs that don't use a full RunContext.
-func (r *RunContext) NewWarningWriter() ui.WriteWarningFunc {
-	return func(msg string) {
-		fmt.Fprintf(r.ErrWriter, "%s%s %s\n", outputIndent, ui.WarningString("Warning:"), msg)
-	}
-}
-
 // NewSpinner returns an ui.Spinner built from the RunContext.
 func (r *RunContext) NewSpinner(msg string) *ui.Spinner {
 	return ui.NewSpinner(msg, ui.SpinnerOptions{
@@ -93,6 +93,36 @@ func (r *RunContext) NewSpinner(msg string) *ui.Spinner {
 		NoColor:       r.Config.NoColor,
 		Indent:        outputIndent,
 	})
+}
+
+func (r *RunContext) GetParallelism() (int, error) {
+	var parallelism int
+
+	if r.Config.Parallelism == nil {
+		parallelism = 4
+		numCPU := runtime.NumCPU()
+		if numCPU*4 > parallelism {
+			parallelism = numCPU * 4
+		}
+
+		if parallelism > 16 {
+			parallelism = 16
+		}
+
+		return parallelism, nil
+	}
+
+	parallelism = *r.Config.Parallelism
+
+	if parallelism < 0 {
+		return parallelism, fmt.Errorf("parallelism must be a positive number")
+	}
+
+	if parallelism > 16 {
+		return parallelism, fmt.Errorf("parallelism must be less than 16")
+	}
+
+	return parallelism, nil
 }
 
 // Context returns the underlying context.
@@ -103,6 +133,10 @@ func (r *RunContext) Context() context.Context {
 // UUID returns the underlying run uuid. This can be used to globally identify the run context.
 func (r *RunContext) UUID() uuid.UUID {
 	return r.uuid
+}
+
+func (r *RunContext) VCSRepositoryURL() string {
+	return r.VCSMetadata.Remote.URL
 }
 
 func (r *RunContext) SetContextValue(key string, value interface{}) {
@@ -118,14 +152,17 @@ func (r *RunContext) ContextValues() map[string]interface{} {
 }
 
 func (r *RunContext) GetResourceWarnings() map[string]map[string]int {
-	if warnings := r.contextVals["resourceWarnings"]; warnings != nil {
+	contextValues := r.ContextValues()
+
+	if warnings := contextValues["resourceWarnings"]; warnings != nil {
 		return warnings.(map[string]map[string]int)
 	}
+
 	return nil
 }
 
 func (r *RunContext) SetResourceWarnings(resourceWarnings map[string]map[string]int) {
-	r.contextVals["resourceWarnings"] = resourceWarnings
+	r.SetContextValue("resourceWarnings", resourceWarnings)
 }
 
 func (r *RunContext) EventEnv() map[string]interface{} {
@@ -179,12 +216,32 @@ func (r *RunContext) IsInfracostComment() bool {
 }
 
 func (r *RunContext) IsCloudEnabled() bool {
-	if r.isCommentCmd && r.Config.EnableCloudForComment {
-		log.Debug("IsCloudEnabled is true for comment with org level setting enabled.")
+	if r.Config.EnableCloud != nil {
+		logging.Logger.WithFields(log.Fields{"is_cloud_enabled": *r.Config.EnableCloud}).Debug("IsCloudEnabled explicitly set through Config.EnabledCloud")
+		return *r.Config.EnableCloud
+	}
+
+	if r.Config.EnableCloudForOrganization {
+		logging.Logger.Debug("IsCloudEnabled is true with org level setting enabled.")
 		return true
 	}
 
-	return (r.Config.EnableCloud != nil && *r.Config.EnableCloud) || r.Config.EnableDashboard
+	logging.Logger.WithFields(log.Fields{"is_cloud_enabled": r.Config.EnableDashboard}).Debug("IsCloudEnabled inferred from Config.EnabledDashboard")
+	return r.Config.EnableDashboard
+}
+
+func (r *RunContext) IsCloudUploadEnabled() bool {
+	if r.Config.EnableCloudUpload != nil {
+		return *r.Config.EnableCloudUpload
+	}
+	return r.IsCloudEnabled()
+}
+
+// IsCloudUploadExplicitlyEnabled returns true if cloud upload has been enabled through one of the
+// env variables ENABLE_CLOUD, ENABLE_CLOUD_UPLOAD, or ENABLE_DASHBOARD
+func (r *RunContext) IsCloudUploadExplicitlyEnabled() bool {
+	return r.IsCloudUploadEnabled() &&
+		(r.Config.EnableCloud != nil || r.Config.EnableCloudUpload != nil || r.Config.EnableDashboard)
 }
 
 func baseVersion(v string) string {
@@ -242,6 +299,7 @@ var ciMap = ciEnvMap{
 		"TDDIUM":               "tddium",
 		"GREENHOUSE":           "greenhouse",
 		"CIRRUS_CI":            "cirrusci",
+		"TS_ENV":               "terraspace",
 	},
 	prefixes: map[string]string{
 		"ATLANTIS_":  "atlantis",
@@ -249,10 +307,16 @@ var ciMap = ciEnvMap{
 		"CONCOURSE_": "concourse",
 		"SPACELIFT_": "spacelift",
 		"HARNESS_":   "harness",
+		"TERRATEAM_": "terrateam",
+		"KEPTN_":     "keptn",
 	},
 }
 
 func ciPlatform() string {
+	if os.Getenv("INFRACOST_CI_PLATFORM") != "" {
+		return os.Getenv("INFRACOST_CI_PLATFORM")
+	}
+
 	for env, name := range ciMap.vars {
 		if IsEnvPresent(env) {
 			return name
@@ -271,50 +335,5 @@ func ciPlatform() string {
 		return "ci"
 	}
 
-	return ""
-}
-
-func ciVCSRepo() string {
-	if IsEnvPresent("GITHUB_REPOSITORY") {
-		serverURL := os.Getenv("GITHUB_SERVER_URL")
-		if serverURL == "" {
-			serverURL = "https://github.com"
-		}
-		return fmt.Sprintf("%s/%s", serverURL, os.Getenv("GITHUB_REPOSITORY"))
-	} else if IsEnvPresent("CI_PROJECT_URL") {
-		return os.Getenv("CI_PROJECT_URL")
-	} else if IsEnvPresent("BUILD_REPOSITORY_URI") {
-		return os.Getenv("BUILD_REPOSITORY_URI")
-	} else if IsEnvPresent("BITBUCKET_GIT_HTTP_ORIGIN") {
-		return os.Getenv("BITBUCKET_GIT_HTTP_ORIGIN")
-	} else if IsEnvPresent("CIRCLE_REPOSITORY_URL") {
-		return os.Getenv("CIRCLE_REPOSITORY_URL")
-	}
-
-	return ""
-}
-
-func ciVCSPullRequestURL() string {
-	if IsEnvPresent("GITHUB_EVENT_PATH") && os.Getenv("GITHUB_EVENT_NAME") == "pull_request" {
-		b, err := os.ReadFile(os.Getenv("GITHUB_EVENT_PATH"))
-		if err != nil {
-			log.Debugf("Error reading GITHUB_EVENT_PATH file: %v", err)
-		}
-
-		var event struct {
-			PullRequest struct {
-				HTMLURL string `json:"html_url"`
-			} `json:"pull_request"`
-		}
-
-		err = json.Unmarshal(b, &event)
-		if err != nil {
-			log.Debugf("Error reading GITHUB_EVENT_PATH JSON: %v", err)
-		}
-
-		return event.PullRequest.HTMLURL
-	} else if IsEnvPresent("CI_PROJECT_URL") && IsEnvPresent("CI_MERGE_REQUEST_IID") {
-		return fmt.Sprintf("%s/merge_requests/%s", os.Getenv("CI_PROJECT_URL"), os.Getenv("CI_MERGE_REQUEST_IID"))
-	}
 	return ""
 }

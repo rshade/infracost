@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/infracost/infracost/internal/apiclient"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"strconv"
 
@@ -10,8 +13,7 @@ import (
 	"github.com/open-policy-agent/opa/rego"
 	"github.com/spf13/cobra"
 
-	"github.com/pkg/errors"
-
+	"github.com/infracost/infracost/internal/clierror"
 	"github.com/infracost/infracost/internal/config"
 	"github.com/infracost/infracost/internal/output"
 	"github.com/infracost/infracost/internal/ui"
@@ -42,6 +44,14 @@ func commentCmd(ctx *config.RunContext) *cobra.Command {
 	cmds := []*cobra.Command{commentGitHubCmd(ctx), commentGitLabCmd(ctx), commentAzureReposCmd(ctx), commentBitbucketCmd(ctx)}
 	for _, subCmd := range cmds {
 		subCmd.Flags().StringArray("policy-path", nil, "Path to Infracost policy files, glob patterns need quotes (experimental)")
+		subCmd.Flags().Bool("show-all-projects", false, "Show all projects in the table of the comment output")
+		subCmd.Flags().Bool("show-changed", false, "Show only projects in the table that have code changes")
+		subCmd.Flags().Bool("show-skipped", false, "List unsupported and free resources")
+		_ = subCmd.Flags().MarkHidden("show-changed")
+		subCmd.Flags().Bool("skip-no-diff", false, "Skip posting comment if there are no resource changes. Only applies to update, hide-and-new, and delete-and-new behaviors")
+		_ = subCmd.Flags().MarkHidden("skip-no-diff")
+		subCmd.Flags().String("guardrail-check-path", "", "Path to Infracost guardrail data (experimental)")
+		_ = subCmd.Flags().MarkHidden("guardrail-check-path")
 	}
 
 	cmd.AddCommand(cmds...)
@@ -49,28 +59,54 @@ func commentCmd(ctx *config.RunContext) *cobra.Command {
 	return cmd
 }
 
-func buildCommentBody(cmd *cobra.Command, ctx *config.RunContext, paths []string, mdOpts output.MarkdownOptions) ([]byte, error) {
+func buildCommentBody(cmd *cobra.Command, ctx *config.RunContext, paths []string, mdOpts output.MarkdownOptions) ([]byte, bool, error) {
+	hasDiff := false
+
 	inputs, err := output.LoadPaths(paths)
 	if err != nil {
-		return nil, err
+		return nil, hasDiff, err
 	}
 
 	combined, err := output.Combine(inputs)
-	if err != nil {
-		return nil, err
+	if errors.As(err, &clierror.WarningError{}) {
+		ui.PrintWarningf(cmd.ErrOrStderr(), err.Error())
+	} else if err != nil {
+		return nil, hasDiff, err
 	}
+
+	hasDiff = combined.HasDiff()
+
 	combined.IsCIRun = ctx.IsCIRun()
 
-	dryRun, _ := cmd.Flags().GetBool("dry-run")
-	if ctx.IsCloudEnabled() && !dryRun {
-		if ctx.Config.IsSelfHosted() {
-			ui.PrintWarning(cmd.ErrOrStderr(), "Infracost Cloud is part of Infracost's hosted services. Contact hello@infracost.io for help.")
+	if ctx.IsCloudUploadEnabled() && ctx.Config.TagPolicyAPIEndpoint != "" {
+		tagPolicyClient := apiclient.NewTagPolicyAPIClient(ctx)
+		tagPolicies, err := tagPolicyClient.CheckTagPolicies(ctx, combined)
+		if err != nil {
+			log.WithError(err).Error("Failed to check tag policies")
 		}
 
-		for _, p := range combined.Projects {
-			p.Metadata.InfracostCommand = "comment"
+		combined.TagPolicies = tagPolicies
+	}
+	tagPolicyCheck := output.NewTagPolicyChecks(combined.TagPolicies)
+
+	var guardrailCheck output.GuardrailCheck
+	dryRun, _ := cmd.Flags().GetBool("dry-run")
+	if ctx.IsCloudUploadEnabled() && !dryRun {
+		if ctx.Config.IsSelfHosted() {
+			ui.PrintWarning(cmd.ErrOrStderr(), "Infracost Cloud is part of Infracost's hosted services. Contact hello@infracost.io for help.")
+		} else {
+			combined.Metadata.InfracostCommand = "comment"
+			result := shareCombinedRun(ctx, combined, inputs)
+			combined.RunID, combined.ShareURL, combined.CloudURL, guardrailCheck = result.RunID, result.ShareURL, result.CloudURL, result.GuardrailCheck
 		}
-		combined.RunID, combined.ShareURL = shareCombinedRun(ctx, combined, inputs)
+	}
+
+	guardrailCheckPath, _ := cmd.Flags().GetString("guardrail-check-path")
+	if guardrailCheckPath != "" {
+		guardrailCheck, err = output.LoadGuardrailCheck(guardrailCheckPath)
+		if err != nil {
+			return nil, hasDiff, fmt.Errorf("Error loading %s used by --guardrail-check-path flag. %s", guardrailCheckPath, err)
+		}
 	}
 
 	var policyChecks output.PolicyCheck
@@ -78,7 +114,7 @@ func buildCommentBody(cmd *cobra.Command, ctx *config.RunContext, paths []string
 	if len(policyPaths) > 0 {
 		policyChecks, err = queryPolicy(policyPaths, combined)
 		if err != nil {
-			return nil, err
+			return nil, hasDiff, err
 		}
 
 		ctx.SetContextValue("passedPolicyCount", len(policyChecks.Passed))
@@ -88,20 +124,30 @@ func buildCommentBody(cmd *cobra.Command, ctx *config.RunContext, paths []string
 	opts := output.Options{
 		DashboardEndpoint: ctx.Config.DashboardEndpoint,
 		NoColor:           ctx.Config.NoColor,
-		ShowSkipped:       true,
 		PolicyChecks:      policyChecks,
+		TagPolicyCheck:    tagPolicyCheck,
+		GuardrailCheck:    guardrailCheck,
 	}
+	opts.ShowAllProjects, _ = cmd.Flags().GetBool("show-all-projects")
+	opts.ShowOnlyChanges, _ = cmd.Flags().GetBool("show-changed")
+	opts.ShowSkipped, _ = cmd.Flags().GetBool("show-skipped")
 
 	b, err := output.ToMarkdown(combined, opts, mdOpts)
 	if err != nil {
-		return nil, err
+		return nil, hasDiff, err
 	}
 
 	if policyChecks.HasFailed() {
-		return b, policyChecks.Failures
+		return b, hasDiff, policyChecks.Failures
+	}
+	if len(guardrailCheck.BlockingFailures()) > 0 {
+		return b, hasDiff, guardrailCheck.BlockingFailures()
+	}
+	if len(tagPolicyCheck.FailingTagPolicies) > 0 {
+		return b, hasDiff, tagPolicyCheck
 	}
 
-	return b, nil
+	return b, hasDiff, nil
 }
 
 type PRNumber int

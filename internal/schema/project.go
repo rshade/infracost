@@ -5,39 +5,78 @@ import (
 
 	"crypto/md5" // nolint:gosec
 	"encoding/base32"
+	"errors"
 	"fmt"
-	"net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/infracost/infracost/internal/logging"
+	"github.com/infracost/infracost/internal/vcs"
 )
 
+const (
+	DiagJSONParsingFailure = iota + 1
+	DiagModuleEvaluationFailure
+	DiagTerragruntEvaluationFailure
+	DiagTerragruntModuleEvaluationFailure
+	DiagPrivateModuleDownloadFailure
+	DiagPrivateRegistryModuleDownloadFailure
+)
+
+// ProjectDiag holds information about all diagnostics associated with a project.
+// This can be both critical or warnings.
+type ProjectDiag struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data"`
+}
+
+func (p *ProjectDiag) Error() string {
+	if p == nil {
+		return ""
+	}
+
+	return p.Message
+}
+
 type ProjectMetadata struct {
-	Path                string `json:"path"`
-	InfracostCommand    string `json:"infracostCommand"`
-	Type                string `json:"type"`
-	TerraformModulePath string `json:"terraformModulePath,omitempty"`
-	TerraformWorkspace  string `json:"terraformWorkspace,omitempty"`
+	Path                string        `json:"path"`
+	Type                string        `json:"type"`
+	ConfigSha           string        `json:"configSha,omitempty"`
+	TerraformModulePath string        `json:"terraformModulePath,omitempty"`
+	TerraformWorkspace  string        `json:"terraformWorkspace,omitempty"`
+	VCSSubPath          string        `json:"vcsSubPath,omitempty"`
+	VCSCodeChanged      *bool         `json:"vcsCodeChanged,omitempty"`
+	Errors              []ProjectDiag `json:"errors,omitempty"`
+	Warnings            []ProjectDiag `json:"warnings,omitempty"`
+	Policies            Policies      `json:"policies,omitempty"`
+}
 
-	Branch            string    `json:"branch"`
-	Commit            string    `json:"commit"`
-	CommitAuthorName  string    `json:"commitAuthorName"`
-	CommitAuthorEmail string    `json:"commitAuthorEmail"`
-	CommitTimestamp   time.Time `json:"commitTimestamp"`
-	CommitMessage     string    `json:"commitMessage"`
+// AddError pushes the provided error onto the metadata list. It does a naive conversion to ProjectDiag
+// if the error provided is not already a diagnostic.
+func (m *ProjectMetadata) AddError(err error) {
+	var diag *ProjectDiag
+	if errors.As(err, &diag) {
+		m.Errors = append(m.Errors, *diag)
+		return
+	}
 
-	VCSRepoURL           string `json:"vcsRepoUrl,omitempty"`
-	VCSSubPath           string `json:"vcsSubPath,omitempty"`
-	VCSProvider          string `json:"vcsProvider,omitempty"`
-	VCSBaseBranch        string `json:"vcsBaseBranch,omitempty"`
-	VCSPullRequestTitle  string `json:"vcsPullRequestTitle,omitempty"`
-	VCSPullRequestURL    string `json:"vcsPullRequestUrl,omitempty"`
-	VCSPullRequestAuthor string `json:"vcsPullRequestAuthor,omitempty"`
-	VCSPipelineRunID     string `json:"vcsPipelineRunId,omitempty"`
-	VCSPullRequestID     string `json:"vcsPullRequestId,omitempty"`
+	m.Errors = append(m.Errors, ProjectDiag{Message: err.Error()})
+}
+
+// AddErrorWithCode is the same as AddError except adds a code to the fallback diagnostic.
+func (m *ProjectMetadata) AddErrorWithCode(err error, code int) {
+	var diag *ProjectDiag
+	if errors.As(err, &diag) {
+		m.Errors = append(m.Errors, *diag)
+		return
+	}
+
+	m.Errors = append(m.Errors, ProjectDiag{Code: code, Message: err.Error()})
+}
+
+func (m *ProjectMetadata) HasErrors() bool {
+	return len(m.Errors) > 0
 }
 
 func (m *ProjectMetadata) WorkspaceLabel() string {
@@ -46,6 +85,32 @@ func (m *ProjectMetadata) WorkspaceLabel() string {
 	}
 
 	return m.TerraformWorkspace
+}
+
+func (m *ProjectMetadata) GenerateProjectName(remote vcs.Remote, dashboardEnabled bool) string {
+	// If the VCS repo is set, use its name
+	if remote.Name != "" {
+		name := remote.Name
+
+		if m.VCSSubPath != "" {
+			name += "/" + m.VCSSubPath
+		}
+
+		return name
+	}
+
+	// If not then use a hash of the absolute filepath to the project
+	if dashboardEnabled {
+		absPath, err := filepath.Abs(m.Path)
+		if err != nil {
+			logging.Logger.Debugf("Could not get absolute path for %s", m.Path)
+			absPath = m.Path
+		}
+
+		return fmt.Sprintf("project_%s", shortHash(absPath, 8))
+	}
+
+	return m.Path
 }
 
 // Projects is a slice of Project that is ordered alphabetically by project name.
@@ -58,12 +123,14 @@ func (p Projects) Less(i, j int) bool { return p[i].Name < p[j].Name }
 // Project contains the existing, planned state of
 // resources and the diff between them.
 type Project struct {
-	Name          string
-	Metadata      *ProjectMetadata
-	PastResources []*Resource
-	Resources     []*Resource
-	Diff          []*Resource
-	HasDiff       bool
+	Name                 string
+	Metadata             *ProjectMetadata
+	PartialPastResources []*PartialResource
+	PartialResources     []*PartialResource
+	PastResources        []*Resource
+	Resources            []*Resource
+	Diff                 []*Resource
+	HasDiff              bool
 }
 
 func NewProject(name string, metadata *ProjectMetadata) *Project {
@@ -74,12 +141,84 @@ func NewProject(name string, metadata *ProjectMetadata) *Project {
 	}
 }
 
+// NameWithWorkspace returns the proect Name appended with the paranenthized workspace name
+// from Metadata if one exists.
+func (p *Project) NameWithWorkspace() string {
+	if p.Metadata.WorkspaceLabel() == "" {
+		return p.Name
+	}
+	return fmt.Sprintf("%s (%s)", p.Name, p.Metadata.WorkspaceLabel())
+}
+
 // AllResources returns a pointer list of all resources of the state.
 func (p *Project) AllResources() []*Resource {
+	m := make(map[*Resource]bool)
+	for _, r := range p.PastResources {
+		m[r] = true
+	}
+
+	for _, r := range p.Resources {
+		if _, ok := m[r]; !ok {
+			m[r] = true
+		}
+	}
+
 	var resources []*Resource
-	resources = append(resources, p.PastResources...)
-	resources = append(resources, p.Resources...)
+	for r := range m {
+		resources = append(resources, r)
+	}
+
 	return resources
+}
+
+// AllPartialResources returns a pointer list of the current and past partial resources
+func (p *Project) AllPartialResources() []*PartialResource {
+	m := make(map[*PartialResource]bool)
+	for _, r := range p.PartialPastResources {
+		m[r] = true
+	}
+
+	for _, r := range p.PartialResources {
+		if _, ok := m[r]; !ok {
+			m[r] = true
+		}
+	}
+
+	var resources []*PartialResource
+	for r := range m {
+		resources = append(resources, r)
+	}
+
+	return resources
+}
+
+// BuildResources builds the resources from the partial resources
+// and sets the PastResources and Resources fields.
+func (p *Project) BuildResources(usageMap UsageMap) {
+	pastResources := make([]*Resource, 0, len(p.PartialPastResources))
+	resources := make([]*Resource, 0, len(p.PartialResources))
+
+	seen := make(map[*PartialResource]*Resource)
+
+	for _, p := range p.PartialPastResources {
+		u := usageMap.Get(p.ResourceData.Address)
+		r := BuildResource(p, u)
+		seen[p] = r
+		pastResources = append(pastResources, r)
+	}
+
+	for _, p := range p.PartialResources {
+		r, ok := seen[p]
+		if !ok {
+			u := usageMap.Get(p.ResourceData.Address)
+			r = BuildResource(p, u)
+			seen[p] = r
+		}
+		resources = append(resources, r)
+	}
+
+	p.PastResources = pastResources
+	p.Resources = resources
 }
 
 // CalculateDiff calculates the diff of past and current resources
@@ -98,79 +237,6 @@ func AllProjectResources(projects []*Project) []*Resource {
 	}
 
 	return resources
-}
-
-func GenerateProjectName(metadata *ProjectMetadata, projectName string, dashboardEnabled bool) string {
-	// If there is a user defined project name, use it.
-	if projectName != "" {
-		return projectName
-	}
-
-	// If the VCS repo is set, create the name from that
-	if metadata.VCSRepoURL != "" {
-		n := nameFromRepoURL(metadata.VCSRepoURL)
-
-		if metadata.VCSSubPath != "" {
-			n += "/" + metadata.VCSSubPath
-		}
-
-		return n
-	}
-
-	// If not then use a hash of the absolute filepath to the project
-	if dashboardEnabled {
-		absPath, err := filepath.Abs(metadata.Path)
-		if err != nil {
-			log.Debugf("Could not get absolute path for %s", metadata.Path)
-			absPath = metadata.Path
-		}
-
-		return fmt.Sprintf("project_%s", shortHash(absPath, 8))
-	}
-
-	return metadata.Path
-}
-
-// Parses the "org/repo" from the git URL if possible.
-// Otherwise it just returns the URL.
-func nameFromRepoURL(rawURL string) string {
-	escaped, err := url.QueryUnescape(rawURL)
-	if err == nil {
-		rawURL = escaped
-	}
-
-	r := regexp.MustCompile(`(?:\w+@|http(?:s)?:\/\/)(?:.*@)?([^:\/]+)[:\/]([^\.]+)`)
-	m := r.FindStringSubmatch(rawURL)
-
-	if len(m) > 2 {
-		var n = m[2]
-
-		if m[1] == "dev.azure.com" || m[1] == "ssh.dev.azure.com" {
-			n = parseAzureDevOpsRepoPath(m[2])
-		}
-
-		return n
-	}
-
-	return rawURL
-}
-
-func parseAzureDevOpsRepoPath(path string) string {
-	r := regexp.MustCompile(`(?:(.+)(?:\/(.+)\/_git\/)(.+))`)
-	m := r.FindStringSubmatch(path)
-
-	if len(m) > 3 {
-		return fmt.Sprintf("%s/%s/%s", m[1], m[2], m[3])
-	}
-
-	r = regexp.MustCompile(`(?:(?:v3\/)(.+)(?:\/(.+)\/)(.+))`)
-	m = r.FindStringSubmatch(path)
-
-	if len(m) > 3 {
-		return fmt.Sprintf("%s/%s/%s", m[1], m[2], m[3])
-	}
-
-	return path
 }
 
 // Returns a lowercase truncated hash of length l

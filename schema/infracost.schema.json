@@ -2,6 +2,34 @@
   "$schema": "http://json-schema.org/draft-04/schema#",
   "$ref": "#/definitions/Root",
   "definitions": {
+    "ActualCosts": {
+      "required": [
+        "resourceId",
+        "startTimestamp",
+        "endTimestamp"
+      ],
+      "properties": {
+        "resourceId": {
+          "type": "string"
+        },
+        "startTimestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endTimestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "costComponents": {
+          "items": {
+            "$ref": "#/definitions/CostComponent"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "Breakdown": {
       "required": [
         "resources",
@@ -62,6 +90,117 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "Metadata": {
+      "required": [
+        "infracostCommand",
+        "vcsBranch",
+        "vcsCommitSha",
+        "vcsCommitAuthorName",
+        "vcsCommitAuthorEmail",
+        "vcsCommitTimestamp",
+        "vcsCommitMessage"
+      ],
+      "properties": {
+        "infracostCommand": {
+          "type": "string"
+        },
+        "vcsBranch": {
+          "type": "string"
+        },
+        "vcsCommitSha": {
+          "type": "string"
+        },
+        "vcsCommitAuthorName": {
+          "type": "string"
+        },
+        "vcsCommitAuthorEmail": {
+          "type": "string"
+        },
+        "vcsCommitTimestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "vcsCommitMessage": {
+          "type": "string"
+        },
+        "vcsRepositoryUrl": {
+          "type": "string"
+        },
+        "vcsProvider": {
+          "type": "string"
+        },
+        "vcsBaseBranch": {
+          "type": "string"
+        },
+        "vcsPullRequestTitle": {
+          "type": "string"
+        },
+        "vcsPullRequestUrl": {
+          "type": "string"
+        },
+        "vcsPullRequestAuthor": {
+          "type": "string"
+        },
+        "vcsPullRequestLabels": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "vcsPipelineRunId": {
+          "type": "string"
+        },
+        "vcsPullRequestId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "Policy": {
+      "required": [
+        "id",
+        "title",
+        "description",
+        "resource_type",
+        "resource_attributes",
+        "address",
+        "suggested",
+        "no_cost",
+        "cost"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "resource_type": {
+          "type": "string"
+        },
+        "resource_attributes": {
+          "additionalProperties": true
+        },
+        "address": {
+          "type": "string"
+        },
+        "suggested": {
+          "type": "string"
+        },
+        "no_cost": {
+          "type": "boolean"
+        },
+        "cost": {
+          "type": ["string", "null"]
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "Project": {
       "required": [
         "name",
@@ -97,26 +236,39 @@
       "additionalProperties": false,
       "type": "object"
     },
+    "ProjectDiag": {
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "properties": {
+        "code": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
     "ProjectMetadata": {
       "required": [
         "path",
-        "infracostCommand",
-        "type",
-        "branch",
-        "commit",
-        "commitAuthorName",
-        "commitAuthorEmail",
-        "commitTimestamp",
-        "commitMessage"
+        "type"
       ],
       "properties": {
         "path": {
           "type": "string"
         },
-        "infracostCommand": {
+        "type": {
           "type": "string"
         },
-        "type": {
+        "configSha": {
           "type": "string"
         },
         "terraformModulePath": {
@@ -125,51 +277,31 @@
         "terraformWorkspace": {
           "type": "string"
         },
-        "branch": {
-          "type": "string"
-        },
-        "commit": {
-          "type": "string"
-        },
-        "commitAuthorName": {
-          "type": "string"
-        },
-        "commitAuthorEmail": {
-          "type": "string"
-        },
-        "commitTimestamp": {
-          "type": "string",
-          "format": "date-time"
-        },
-        "commitMessage": {
-          "type": "string"
-        },
-        "vcsRepoUrl": {
-          "type": "string"
-        },
         "vcsSubPath": {
           "type": "string"
         },
-        "vcsProvider": {
-          "type": "string"
+        "vcsCodeChanged": {
+          "type": "boolean"
         },
-        "vcsBaseBranch": {
-          "type": "string"
+        "errors": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/ProjectDiag"
+          },
+          "type": "array"
         },
-        "vcsPullRequestTitle": {
-          "type": "string"
+        "warnings": {
+          "items": {
+            "$ref": "#/definitions/ProjectDiag"
+          },
+          "type": "array"
         },
-        "vcsPullRequestUrl": {
-          "type": "string"
-        },
-        "vcsPullRequestAuthor": {
-          "type": "string"
-        },
-        "vcsPipelineRunId": {
-          "type": "string"
-        },
-        "vcsPullRequestId": {
-          "type": "string"
+        "policies": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/Policy"
+          },
+          "type": "array"
         }
       },
       "additionalProperties": false,
@@ -184,6 +316,9 @@
       ],
       "properties": {
         "name": {
+          "type": "string"
+        },
+        "resourceType": {
           "type": "string"
         },
         "tags": {
@@ -215,6 +350,13 @@
           },
           "type": "array"
         },
+        "actualCosts": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/ActualCosts"
+          },
+          "type": "array"
+        },
         "subresources": {
           "items": {
             "$ref": "#/definitions/Subresource"
@@ -228,6 +370,7 @@
     "Root": {
       "required": [
         "version",
+        "metadata",
         "currency",
         "projects",
         "totalHourlyCost",
@@ -243,10 +386,17 @@
         "version": {
           "type": "string"
         },
+        "metadata": {
+          "$schema": "http://json-schema.org/draft-04/schema#",
+          "$ref": "#/definitions/Metadata"
+        },
         "runId": {
           "type": "string"
         },
         "shareUrl": {
+          "type": "string"
+        },
+        "cloudUrl": {
           "type": "string"
         },
         "currency": {
@@ -256,6 +406,13 @@
           "items": {
             "$schema": "http://json-schema.org/draft-04/schema#",
             "$ref": "#/definitions/Project"
+          },
+          "type": "array"
+        },
+        "tagPolicies": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/TagPolicy"
           },
           "type": "array"
         },
@@ -299,6 +456,9 @@
         "name": {
           "type": "string"
         },
+        "resourceType": {
+          "type": "string"
+        },
         "tags": {
           "patternProperties": {
             ".*": {
@@ -325,6 +485,13 @@
           "items": {
             "$schema": "http://json-schema.org/draft-04/schema#",
             "$ref": "#/definitions/CostComponent"
+          },
+          "type": "array"
+        },
+        "actualCosts": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/ActualCosts"
           },
           "type": "array"
         },
@@ -381,6 +548,111 @@
             }
           },
           "type": "object"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TagPolicy": {
+      "required": [
+        "name",
+        "tagPolicyId",
+        "message",
+        "prComment",
+        "blockPr",
+        "resources"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "tagPolicyId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "prComment": {
+          "type": "boolean"
+        },
+        "blockPr": {
+          "type": "boolean"
+        },
+        "resources": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/TagPolicyResource"
+          },
+          "type": "array"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TagPolicyInvalidTag": {
+      "required": [
+        "key",
+        "validValues",
+        "validRegex"
+      ],
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "validValues": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "validRegex": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "TagPolicyResource": {
+      "required": [
+        "address",
+        "resourceType",
+        "path",
+        "line",
+        "projectNames",
+        "missingMandatoryTags",
+        "invalidTags"
+      ],
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "resourceType": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "line": {
+          "type": "integer"
+        },
+        "projectNames": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "missingMandatoryTags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "invalidTags": {
+          "items": {
+            "$schema": "http://json-schema.org/draft-04/schema#",
+            "$ref": "#/definitions/TagPolicyInvalidTag"
+          },
+          "type": "array"
         }
       },
       "additionalProperties": false,

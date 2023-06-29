@@ -34,8 +34,8 @@ func (r *GlueJob) PopulateUsage(u *schema.UsageData) {
 // BuildResource builds a schema.Resource from a valid GlueJob struct. GlueJob has just one schema.CostComponent
 // associated with it:
 //
-//		1. DPU hours - GlueJob is charged per hour that the job is run. Users are charged based on the number of DPU
-//		   units they use in that time.
+//  1. DPU hours - GlueJob is charged per hour that the job is run. Users are charged based on the number of DPU
+//     units they use in that time.
 //
 // This method is called after the resource is initialised by an IaC provider. See providers folder for more information.
 func (r *GlueJob) BuildResource() *schema.Resource {
@@ -45,13 +45,13 @@ func (r *GlueJob) BuildResource() *schema.Resource {
 	}
 
 	suffix := "DPUs"
-	if r.DPUs <= 1 {
+	if r.DPUs == 1 {
 		suffix = "DPU"
 	}
 
 	unit := fmt.Sprintf("hours (%d %s)", int(r.DPUs), suffix)
 
-	if r.DPUs < 1 {
+	if r.DPUs > 0 && r.DPUs < 1 {
 		unit = fmt.Sprintf("hours (%.4f %s)", r.DPUs, suffix)
 	}
 
@@ -72,6 +72,7 @@ func (r *GlueJob) BuildResource() *schema.Resource {
 					Service:       strPtr("AWSGlue"),
 					ProductFamily: strPtr("AWS Glue"),
 					AttributeFilters: []*schema.AttributeFilter{
+						{Key: "group", Value: strPtr("ETL Job run")},
 						{Key: "operation", ValueRegex: strPtr("/^jobrun$/i")},
 					},
 				},

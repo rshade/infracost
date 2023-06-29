@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	stdLog "log"
 	"os"
 	"runtime/debug"
 
-	"github.com/fatih/color"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
@@ -27,7 +26,7 @@ import (
 func init() {
 	// set the stdlib default logger to flush to discard, this is done as a number of
 	// Terraform libs use the std logger directly, which impacts Infracost output.
-	stdLog.SetOutput(ioutil.Discard)
+	stdLog.SetOutput(io.Discard)
 }
 
 func main() {
@@ -118,6 +117,7 @@ func newRootCmd(ctx *config.RunContext) *cobra.Command {
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			ctx.SetContextValue("command", cmd.Name())
+			ctx.CMD = cmd.Name()
 			if cmd.Name() == "comment" || (cmd.Parent() != nil && cmd.Parent().Name() == "comment") {
 				ctx.SetIsInfracostComment()
 			}
@@ -148,6 +148,7 @@ func newRootCmd(ctx *config.RunContext) *cobra.Command {
 			}
 
 			loadCloudSettings(ctx)
+
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -178,10 +179,13 @@ func newRootCmd(ctx *config.RunContext) *cobra.Command {
 	rootCmd.AddCommand(configureCmd(ctx))
 	rootCmd.AddCommand(diffCmd(ctx))
 	rootCmd.AddCommand(breakdownCmd(ctx))
+	rootCmd.AddCommand(scanCommand(ctx))
 	rootCmd.AddCommand(outputCmd(ctx))
+	rootCmd.AddCommand(uploadCmd(ctx))
 	rootCmd.AddCommand(commentCmd(ctx))
 	rootCmd.AddCommand(completionCmd())
 	rootCmd.AddCommand(figAutocompleteCmd())
+	rootCmd.AddCommand(newGenerateCommand())
 
 	rootCmd.SetUsageTemplate(fmt.Sprintf(`%s{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
@@ -248,14 +252,22 @@ func loadCloudSettings(ctx *config.RunContext) {
 	}
 	logging.Logger.WithFields(log.Fields{"result": fmt.Sprintf("%+v", result)}).Debug("Successfully loaded settings from Infracost Cloud")
 
-	ctx.Config.EnableCloudForComment = result.CloudEnabled
+	ctx.Config.EnableCloudForOrganization = result.CloudEnabled
+	if result.UsageAPIEnabled && ctx.Config.UsageAPIEndpoint == "" {
+		ctx.Config.UsageAPIEndpoint = ctx.Config.DashboardAPIEndpoint
+		logging.Logger.Info("Enabled usage API")
+	}
+	if result.ActualCostsEnabled && ctx.Config.UsageAPIEndpoint != "" {
+		ctx.Config.UsageActualCosts = true
+		logging.Logger.Info("Enabled actual costs")
+	}
 }
 
 func checkAPIKey(apiKey string, apiEndpoint string, defaultEndpoint string) error {
 	if apiEndpoint == defaultEndpoint && apiKey == "" {
 		return fmt.Errorf(
 			"No INFRACOST_API_KEY environment variable is set.\nWe run a free Cloud Pricing API, to get an API key run %s",
-			ui.PrimaryString("infracost register"),
+			ui.PrimaryString("infracost auth login"),
 		)
 	}
 
@@ -269,7 +281,7 @@ func handleCLIError(ctx *config.RunContext, cliErr error) {
 
 	err := apiclient.ReportCLIError(ctx, cliErr, true)
 	if err != nil {
-		logging.Logger.WithError(err).Warn("error reporting CLI error")
+		logging.Logger.WithError(err).Debug("error reporting CLI error")
 	}
 }
 
@@ -278,7 +290,7 @@ func handleUnexpectedErr(ctx *config.RunContext, err error) {
 
 	err = apiclient.ReportCLIError(ctx, err, false)
 	if err != nil {
-		logging.Logger.WithError(err).Warn("error sending unexpected runtime error")
+		logging.Logger.WithError(err).Debug("error sending unexpected runtime error")
 	}
 }
 
@@ -300,31 +312,14 @@ func loadGlobalFlags(ctx *config.RunContext, cmd *cobra.Command) error {
 	if ctx.IsCIRun() {
 		ctx.Config.NoColor = true
 	}
-	if cmd.Flags().Changed("no-color") {
-		ctx.Config.NoColor, _ = cmd.Flags().GetBool("no-color")
-	}
-	color.NoColor = ctx.Config.NoColor
 
-	if cmd.Flags().Changed("log-level") {
-		ctx.Config.LogLevel, _ = cmd.Flags().GetString("log-level")
-		err := logging.ConfigureBaseLogger(ctx.Config)
-		if err != nil {
-			return err
-		}
-	}
-
-	if cmd.Flags().Changed("debug-report") {
-		ctx.Config.DebugReport, _ = cmd.Flags().GetBool("debug-report")
-		err := logging.ConfigureBaseLogger(ctx.Config)
-		if err != nil {
-			return err
-		}
+	err := ctx.Config.LoadGlobalFlags(cmd)
+	if err != nil {
+		return err
 	}
 
 	ctx.SetContextValue("dashboardEnabled", ctx.Config.EnableDashboard)
-	if ctx.Config.EnableCloud != nil {
-		ctx.SetContextValue("cloudEnabled", ctx.Config.EnableCloud)
-	}
+	ctx.SetContextValue("cloudEnabled", ctx.IsCloudEnabled())
 	ctx.SetContextValue("isDefaultPricingAPIEndpoint", ctx.Config.PricingAPIEndpoint == ctx.Config.DefaultPricingAPIEndpoint)
 
 	flagNames := make([]string, 0)
@@ -345,7 +340,7 @@ func saveOutFile(ctx *config.RunContext, cmd *cobra.Command, outFile string, b [
 
 // saveOutFile saves the output of the command to the file path past in the `--out-file` flag
 func saveOutFileWithMsg(ctx *config.RunContext, cmd *cobra.Command, outFile, successMsg string, b []byte) error {
-	err := ioutil.WriteFile(outFile, b, 0644) // nolint:gosec
+	err := os.WriteFile(outFile, b, 0644) // nolint:gosec
 	if err != nil {
 		return errors.Wrap(err, "Unable to save output")
 	}

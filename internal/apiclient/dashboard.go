@@ -15,7 +15,6 @@ import (
 
 type DashboardAPIClient struct {
 	APIClient
-	shouldStoreRun bool
 }
 
 type CreateAPIKeyResponse struct {
@@ -24,12 +23,16 @@ type CreateAPIKeyResponse struct {
 }
 
 type AddRunResponse struct {
-	RunID    string `json:"id"`
-	ShareURL string `json:"shareUrl"`
+	RunID          string `json:"id"`
+	ShareURL       string `json:"shareUrl"`
+	CloudURL       string `json:"cloudUrl"`
+	GuardrailCheck output.GuardrailCheck
 }
 
 type QueryCLISettingsResponse struct {
-	CloudEnabled bool `json:"cloudEnabled"`
+	CloudEnabled       bool `json:"cloudEnabled"`
+	ActualCostsEnabled bool `json:"actualCostsEnabled"`
+	UsageAPIEnabled    bool `json:"usageApiEnabled"`
 }
 
 type runInput struct {
@@ -55,40 +58,10 @@ func NewDashboardAPIClient(ctx *config.RunContext) *DashboardAPIClient {
 			apiKey:   ctx.Config.APIKey,
 			uuid:     ctx.UUID(),
 		},
-		shouldStoreRun: ctx.IsCloudEnabled() && !ctx.Config.IsSelfHosted(),
 	}
 }
 
-func (c *DashboardAPIClient) CreateAPIKey(name string, email string, contextVals map[string]interface{}) (CreateAPIKeyResponse, error) {
-	d := map[string]interface{}{
-		"name":        name,
-		"email":       email,
-		"os":          contextVals["os"],
-		"version":     contextVals["version"],
-		"fullVersion": contextVals["fullVersion"],
-	}
-	respBody, err := c.doRequest("POST", "/apiKeys?source=cli-register", d)
-	if err != nil {
-		return CreateAPIKeyResponse{}, err
-	}
-
-	var r CreateAPIKeyResponse
-	err = json.Unmarshal(respBody, &r)
-	if err != nil {
-		return r, errors.Wrap(err, "Invalid response from API")
-	}
-
-	return r, nil
-}
-
-func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (AddRunResponse, error) {
-	response := AddRunResponse{}
-
-	if !c.shouldStoreRun {
-		log.Debug("Skipping sending project results since it is disabled.")
-		return response, nil
-	}
-
+func newRunInput(ctx *config.RunContext, out output.Root) (*runInput, error) {
 	projectResultInputs := make([]projectResultInput, len(out.Projects))
 	for i, project := range out.Projects {
 		projectResultInputs[i] = projectResultInput{
@@ -102,6 +75,20 @@ func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (Ad
 	}
 
 	ctxValues := ctx.ContextValues()
+
+	var metadata map[string]interface{}
+	b, err := json.Marshal(out.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard client failed to marshal output metadata %w", err)
+	}
+
+	err = json.Unmarshal(b, &metadata)
+	if err != nil {
+		return nil, fmt.Errorf("dashboard client failed to unmarshal output metadata %w", err)
+	}
+
+	ctxValues["repoMetadata"] = metadata
+
 	if ctx.IsInfracostComment() {
 		// Clone the map to cleanup up the "command" key to show "comment".  It is
 		// currently set to the sub comment (e.g. "github")
@@ -112,13 +99,24 @@ func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (Ad
 		ctxValues["command"] = "comment"
 	}
 
+	return &runInput{
+		ProjectResults: projectResultInputs,
+		Currency:       out.Currency,
+		TimeGenerated:  out.TimeGenerated.UTC(),
+		Metadata:       ctxValues,
+	}, nil
+}
+
+func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (AddRunResponse, error) {
+	response := AddRunResponse{}
+
+	ri, err := newRunInput(ctx, out)
+	if err != nil {
+		return response, err
+	}
+
 	v := map[string]interface{}{
-		"run": runInput{
-			ProjectResults: projectResultInputs,
-			Currency:       out.Currency,
-			TimeGenerated:  out.TimeGenerated.UTC(),
-			Metadata:       ctxValues,
-		},
+		"run": *ri,
 	}
 
 	q := `
@@ -126,6 +124,17 @@ func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (Ad
 			addRun(run: $run) {
 				id
 				shareUrl
+				organization {
+					id
+					name
+				}
+				guardrailsChecked
+				guardrailComment
+				guardrailEvents {
+					triggerReason
+					prComment
+					blockPr
+				}
 			}
 		}
 	`
@@ -134,21 +143,59 @@ func (c *DashboardAPIClient) AddRun(ctx *config.RunContext, out output.Root) (Ad
 		return response, err
 	}
 
-	successMsg := "Estimate uploaded to Infracost Cloud"
-	if ctx.Config.IsLogging() {
-		log.Info(successMsg)
-	} else {
-		fmt.Fprintf(ctx.ErrWriter, "%s\n", successMsg)
-	}
-
 	if len(results) > 0 {
-
 		if results[0].Get("errors").Exists() {
 			return response, errors.New(results[0].Get("errors").String())
 		}
 
-		response.RunID = results[0].Get("data.addRun.id").String()
-		response.ShareURL = results[0].Get("data.addRun.shareUrl").String()
+		cloudRun := results[0].Get("data.addRun")
+
+		orgName := cloudRun.Get("organization.name").String()
+		orgMsg := ""
+		if orgName != "" {
+			orgMsg = fmt.Sprintf("organization '%s' in ", orgName)
+		}
+		successMsg := fmt.Sprintf("Estimate uploaded to %sInfracost Cloud", orgMsg)
+
+		if ctx.Config.IsLogging() {
+			log.Info(successMsg)
+		} else {
+			fmt.Fprintf(ctx.ErrWriter, "%s\n", successMsg)
+		}
+
+		response.RunID = cloudRun.Get("id").String()
+		response.ShareURL = cloudRun.Get("shareUrl").String()
+		response.GuardrailCheck.TotalChecked = cloudRun.Get("guardrailsChecked").Int()
+		response.GuardrailCheck.Comment = cloudRun.Get("guardrailComment").Bool()
+		for _, event := range cloudRun.Get("guardrailEvents").Array() {
+			newEvent := output.GuardrailEvent{
+				TriggerReason: event.Get("triggerReason").String(),
+				PRComment:     event.Get("prComment").Bool(),
+				BlockPR:       event.Get("blockPr").Bool(),
+			}
+			response.GuardrailCheck.GuardrailEvents = append(response.GuardrailCheck.GuardrailEvents, newEvent)
+		}
+
+		if response.GuardrailCheck.TotalChecked > 0 {
+			guardrailStr := "guardrail"
+			if response.GuardrailCheck.TotalChecked > 1 {
+				guardrailStr = "guardrails"
+			}
+			guardrailsMsg := fmt.Sprintf(`%d %s checked`, response.GuardrailCheck.TotalChecked, guardrailStr)
+			if ctx.Config.IsLogging() {
+				log.Info(guardrailsMsg)
+			} else {
+				fmt.Fprintf(ctx.ErrWriter, "%s\n", guardrailsMsg)
+			}
+			for _, f := range response.GuardrailCheck.AllFailures() {
+				failureMsg := fmt.Sprintf(`guardrail check failed: %s`, f)
+				if ctx.Config.IsLogging() {
+					log.Info(failureMsg)
+				} else {
+					fmt.Fprintf(ctx.ErrWriter, " - %s\n", failureMsg)
+				}
+			}
+		}
 	}
 	return response, nil
 }
@@ -160,6 +207,8 @@ func (c *DashboardAPIClient) QueryCLISettings() (QueryCLISettingsResponse, error
 		query CLISettings {
         	cliSettings {
             	cloudEnabled
+				actualCostsEnabled
+				usageApiEnabled
         	}
     	}
 	`
@@ -174,6 +223,8 @@ func (c *DashboardAPIClient) QueryCLISettings() (QueryCLISettingsResponse, error
 		}
 
 		response.CloudEnabled = results[0].Get("data.cliSettings.cloudEnabled").Bool()
+		response.ActualCostsEnabled = results[0].Get("data.cliSettings.actualCostsEnabled").Bool()
+		response.UsageAPIEnabled = results[0].Get("data.cliSettings.usageApiEnabled").Bool()
 	}
 	return response, nil
 }

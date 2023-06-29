@@ -5,21 +5,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/Rhymond/go-money"
 	"github.com/mitchellh/go-homedir"
 	"github.com/pkg/errors"
 	"github.com/shopspring/decimal"
 	"golang.org/x/mod/semver"
 
+	log "github.com/sirupsen/logrus"
+
+	"github.com/infracost/infracost/internal/clierror"
 	"github.com/infracost/infracost/internal/schema"
 )
 
 var (
-	minOutputVersion = "0.2"
-	maxOutputVersion = "0.2"
+	minOutputVersion     = "0.2"
+	maxOutputVersion     = "0.2"
+	GitHubMaxMessageSize = 262144 // bytes
 )
 
 type ReportInput struct {
@@ -33,7 +39,7 @@ func Load(p string) (Root, error) {
 	var out Root
 	_, err := os.Stat(p)
 	if errors.Is(err, os.ErrNotExist) {
-		return out, errors.New("Infracost JSON file does not exist")
+		return out, errors.New("Infracost JSON file does not exist, generate it by running the following command then try again:\ninfracost breakdown --path /code --format json --out-file infracost-base.json")
 	}
 
 	data, err := os.ReadFile(p)
@@ -43,7 +49,7 @@ func Load(p string) (Root, error) {
 
 	err = json.Unmarshal(data, &out)
 	if err != nil {
-		return out, fmt.Errorf("invalid Infracost JSON file %w", err)
+		return out, fmt.Errorf("invalid Infracost JSON file %w, generate it by running the following command then try again:\ninfracost breakdown --path /code --format json --out-file infracost-base.json", err)
 	}
 
 	if !checkOutputVersion(out.Version) {
@@ -122,8 +128,25 @@ func CompareTo(current, prior Root) (Root, error) {
 		scp.HasDiff = true
 
 		if v, ok := priorProjects[p.LabelWithMetadata()]; ok {
-			scp.PastResources = v.Resources
-			scp.Diff = schema.CalculateDiff(scp.PastResources, scp.Resources)
+			if !p.Metadata.HasErrors() && !v.Metadata.HasErrors() {
+				scp.PastResources = v.Resources
+				scp.Diff = schema.CalculateDiff(scp.PastResources, scp.Resources)
+			}
+
+			if !p.Metadata.HasErrors() && v.Metadata.HasErrors() {
+				// the prior project has errors, but the current one does not
+				// The prior errors will be copied over to the current, but we
+				// also need to remove the current project costs
+				scp.Resources = nil
+				scp.Diff = nil
+				scp.HasDiff = false
+			}
+
+			for _, pastE := range v.Metadata.Errors {
+				pastE.Message = "Diff baseline error: " + pastE.Message
+				scp.Metadata.Errors = append(scp.Metadata.Errors, pastE)
+			}
+
 			delete(priorProjects, p.LabelWithMetadata())
 		}
 
@@ -146,6 +169,20 @@ func CompareTo(current, prior Root) (Root, error) {
 		return out, err
 	}
 
+	// preserve the summary from the original run
+	currentProjects := make(map[string]Project)
+	for _, p := range prior.Projects {
+		currentProjects[p.LabelWithMetadata()] = p
+	}
+	for _, outP := range out.Projects {
+		if v, ok := currentProjects[outP.LabelWithMetadata()]; ok {
+			outP.Summary = v.Summary
+			outP.fullSummary = v.fullSummary
+		}
+	}
+
+	out.Summary = current.Summary
+	out.FullSummary = current.FullSummary
 	out.Currency = current.Currency
 	return out, nil
 }
@@ -164,7 +201,10 @@ func Combine(inputs []ReportInput) (Root, error) {
 	summaries := make([]*Summary, 0, len(inputs))
 	currency := ""
 
-	for _, input := range inputs {
+	var metadata Metadata
+	var invalidMetadata bool
+	builder := strings.Builder{}
+	for i, input := range inputs {
 		var err error
 		currency, err = checkCurrency(currency, input.Root.Currency)
 		if err != nil {
@@ -218,6 +258,13 @@ func Combine(inputs []ReportInput) (Root, error) {
 
 			diffTotalHourlyCost = decimalPtr(diffTotalHourlyCost.Add(*input.Root.DiffTotalHourlyCost))
 		}
+
+		if i != 0 && metadata.VCSRepositoryURL != input.Root.Metadata.VCSRepositoryURL {
+			invalidMetadata = true
+		}
+
+		metadata = input.Root.Metadata
+		builder.WriteString(fmt.Sprintf("%q, ", input.Root.Metadata.VCSRepositoryURL))
 	}
 
 	combined.Version = outputVersion
@@ -231,6 +278,18 @@ func Combine(inputs []ReportInput) (Root, error) {
 	combined.DiffTotalMonthlyCost = diffTotalMonthlyCost
 	combined.TimeGenerated = time.Now().UTC()
 	combined.Summary = MergeSummaries(summaries)
+	combined.Metadata = metadata
+	if len(inputs) > 0 {
+		combined.CloudURL = inputs[len(inputs)-1].Root.CloudURL
+	}
+
+	if invalidMetadata {
+		return combined, clierror.NewWarningF(
+			"combining Infracost JSON for different VCS repositories %s. Using %s as the top-level repository in the outputted JSON",
+			strings.TrimRight(builder.String(), ", "),
+			metadata.VCSRepositoryURL,
+		)
+	}
 
 	return combined, nil
 }
@@ -264,6 +323,10 @@ func FormatOutput(format string, r Root, opts Options) ([]byte, error) {
 	var b []byte
 	var err error
 
+	if opts.CurrencyFormat != "" {
+		addCurrencyFormat(opts.CurrencyFormat)
+	}
+
 	switch format {
 	case "json":
 		b, err = ToJSON(r, opts)
@@ -271,7 +334,9 @@ func FormatOutput(format string, r Root, opts Options) ([]byte, error) {
 		b, err = ToHTML(r, opts)
 	case "diff":
 		b, err = ToDiff(r, opts)
-	case "github-comment", "gitlab-comment", "azure-repos-comment":
+	case "github-comment":
+		b, err = ToMarkdown(r, opts, MarkdownOptions{MaxMessageSize: GitHubMaxMessageSize})
+	case "gitlab-comment", "azure-repos-comment":
 		b, err = ToMarkdown(r, opts, MarkdownOptions{})
 	case "bitbucket-comment":
 		b, err = ToMarkdown(r, opts, MarkdownOptions{BasicSyntax: true})
@@ -288,4 +353,32 @@ func FormatOutput(format string, r Root, opts Options) ([]byte, error) {
 	}
 
 	return b, nil
+}
+
+func addCurrencyFormat(currencyFormat string) {
+	rgx := regexp.MustCompile(`^(.{3}): (.*)1(,|\.)234(,|\.)?([0-9]*)?(.*)$`)
+	m := rgx.FindStringSubmatch(currencyFormat)
+
+	if len(m) == 0 {
+		log.Warningf("Invalid currency format: %s", currencyFormat)
+		return
+	}
+
+	currency := m[1]
+
+	graphemeWithSpace := m[2]
+	grapheme := strings.TrimSpace(graphemeWithSpace)
+	template := "$" + strings.Repeat(" ", len(graphemeWithSpace)-len(grapheme)) + "1"
+
+	if graphemeWithSpace == "" {
+		graphemeWithSpace = m[6]
+		grapheme = strings.TrimSpace(graphemeWithSpace)
+		template = "1" + strings.Repeat(" ", len(graphemeWithSpace)-len(grapheme)) + "$"
+	}
+
+	thousand := m[3]
+	decimal := m[4]
+	fraction := len(m[5])
+
+	money.AddCurrency(currency, grapheme, template, decimal, thousand, fraction)
 }

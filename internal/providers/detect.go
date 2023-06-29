@@ -60,21 +60,20 @@ func Detect(ctx *config.ProjectContext, includePastResources bool) (schema.Provi
 			ctx,
 			nil,
 			hcl.OptionWithSpinner(ctx.RunContext.NewSpinner),
-			hcl.OptionWithWarningFunc(ctx.RunContext.NewWarningWriter()),
 		)
 
 		if providerErr != nil {
 			return nil, providerErr
 		}
 
-		if err := validateProjectForHCL(ctx, path); err != nil {
+		if err := validateProjectForHCL(ctx); err != nil {
 			return h, err
 		}
 
 		return h, nil
 	case "terragrunt_dir":
 		h := terraform.NewTerragruntHCLProvider(ctx, includePastResources)
-		if err := validateProjectForHCL(ctx, path); err != nil {
+		if err := validateProjectForHCL(ctx); err != nil {
 			return h, err
 		}
 
@@ -98,22 +97,22 @@ func Detect(ctx *config.ProjectContext, includePastResources bool) (schema.Provi
 	return nil, fmt.Errorf("could not detect path type for '%s'", path)
 }
 
-func validateProjectForHCL(ctx *config.ProjectContext, path string) error {
+func validateProjectForHCL(ctx *config.ProjectContext) error {
 	if ctx.ProjectConfig.TerraformInitFlags != "" {
 		return &ValidationError{
-			err: "Flag terraform-init-flags is deprecated and only compatible with --terraform-force-cli.",
+			warn: "Flag terraform-init-flags is deprecated and only compatible with --terraform-force-cli.",
 		}
 	}
 
 	if ctx.ProjectConfig.TerraformPlanFlags != "" {
 		return &ValidationError{
-			err: "Flag terraform-plan-flags is deprecated and only compatible with --terraform-force-cli. If you want to pass Terraform variables use the --terraform-vars or --terraform-var-file flag.",
+			warn: "Flag terraform-plan-flags is deprecated and only compatible with --terraform-force-cli. If you want to pass Terraform variables use the --terraform-vars or --terraform-var-file flag.",
 		}
 	}
 
 	if ctx.ProjectConfig.TerraformUseState {
 		return &ValidationError{
-			err: "Flag terraform-use-state is deprecated and only compatible with --terraform-force-cli.",
+			warn: "Flag terraform-use-state is deprecated and only compatible with --terraform-force-cli.",
 		}
 	}
 
@@ -242,7 +241,7 @@ func isTerragruntNestedDir(path string, maxDepth int) bool {
 		if err == nil {
 			for _, entry := range entries {
 				name := entry.Name()
-				if entry.IsDir() && name != ".infracost" && name != ".terraform" {
+				if entry.IsDir() && name != config.InfracostDir && name != ".terraform" {
 					if isTerragruntNestedDir(filepath.Join(path, name), maxDepth-1) {
 						return true
 					}

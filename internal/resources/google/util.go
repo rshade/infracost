@@ -58,15 +58,16 @@ func contains(a []string, x string) bool {
 // This can be used in resources that define a usage parameter that's changed on a per-region basis, e.g:
 //
 // monthly_data_processed_gb:
-//   asia_northeast1: 188
-//   asia_east2: 78
+//
+//	asia_northeast1: 188
+//	asia_east2: 78
 //
 // can be handled by adding a usage cost property to your resource like so:
 //
-// type MyResource struct {
-//    ...
-//    MonthlyDataProcessedGB *RegionsUsage `infracost_usage:"monthly_processed_gb"`
-// }
+//	type MyResource struct {
+//	   ...
+//	   MonthlyDataProcessedGB *RegionsUsage `infracost_usage:"monthly_processed_gb"`
+//	}
 type RegionsUsage struct {
 	AsiaEast1              *float64 `infracost_usage:"asia_east1"`
 	AsiaEast2              *float64 `infracost_usage:"asia_east2"`
@@ -183,4 +184,27 @@ func GetFloatFieldValueByUsageTag(tagValue string, s interface{}) float64 {
 		}
 	}
 	return 0
+}
+
+func regionToContinent(region string) string {
+	gcpRegionPrefixToContinent := map[string]string{
+		"asia":         "Asia",
+		"europe":       "Europe",
+		"northamerica": "Northern America",
+		"southamerica": "Latin America",
+		"us":           "Northern America",
+		"australia":    "Oceania",
+	}
+
+	pieces := strings.Split(region, "-")
+	if len(pieces) == 0 {
+		return "Northern America"
+	}
+
+	continent, ok := gcpRegionPrefixToContinent[pieces[0]]
+	if !ok {
+		return "Northern America"
+	}
+
+	return continent
 }

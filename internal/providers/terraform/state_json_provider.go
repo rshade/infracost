@@ -33,10 +33,10 @@ func (p *StateJSONProvider) DisplayType() string {
 }
 
 func (p *StateJSONProvider) AddMetadata(metadata *schema.ProjectMetadata) {
-	// no op
+	metadata.ConfigSha = p.ctx.ProjectConfig.ConfigSha
 }
 
-func (p *StateJSONProvider) LoadResources(usage map[string]*schema.UsageData) ([]*schema.Project, error) {
+func (p *StateJSONProvider) LoadResources(usage schema.UsageMap) ([]*schema.Project, error) {
 	spinner := ui.NewSpinner("Extracting only cost-related params from terraform", ui.SpinnerOptions{
 		EnableLogging: p.ctx.RunContext.Config.IsLogging(),
 		NoColor:       p.ctx.RunContext.Config.NoColor,
@@ -52,18 +52,21 @@ func (p *StateJSONProvider) LoadResources(usage map[string]*schema.UsageData) ([
 	metadata := config.DetectProjectMetadata(p.ctx.ProjectConfig.Path)
 	metadata.Type = p.Type()
 	p.AddMetadata(metadata)
-	name := schema.GenerateProjectName(metadata, p.ctx.ProjectConfig.Name, p.ctx.RunContext.IsCloudEnabled())
+	name := p.ctx.ProjectConfig.Name
+	if name == "" {
+		name = metadata.GenerateProjectName(p.ctx.RunContext.VCSMetadata.Remote, p.ctx.RunContext.IsCloudEnabled())
+	}
 
 	project := schema.NewProject(name, metadata)
 	parser := NewParser(p.ctx, p.includePastResources)
 
-	pastResources, resources, err := parser.parseJSON(j, usage)
+	partialPastResources, partialResources, err := parser.parseJSON(j, usage)
 	if err != nil {
 		return []*schema.Project{project}, errors.Wrap(err, "Error parsing Terraform state JSON file")
 	}
 
-	project.PastResources = pastResources
-	project.Resources = resources
+	project.PartialPastResources = partialPastResources
+	project.PartialResources = partialResources
 
 	spinner.Success()
 	return []*schema.Project{project}, nil

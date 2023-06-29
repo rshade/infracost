@@ -4,13 +4,23 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io/ioutil"
+	"net/http"
+	"os"
+
+	"github.com/hashicorp/go-retryablehttp"
 
 	"github.com/infracost/infracost/internal/config"
+	"github.com/infracost/infracost/internal/logging"
 	"github.com/infracost/infracost/internal/schema"
 
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+)
+
+var (
+	excludedEnv = map[string]struct{}{
+		"repoMetadata": {},
+	}
 )
 
 type PricingAPIClient struct {
@@ -43,7 +53,7 @@ func NewPricingAPIClient(ctx *config.RunContext) *PricingAPIClient {
 			rootCAs = x509.NewCertPool()
 		}
 
-		caCerts, err := ioutil.ReadFile(ctx.Config.TLSCACertFile)
+		caCerts, err := os.ReadFile(ctx.Config.TLSCACertFile)
 		if err != nil {
 			log.Errorf("Error reading CA cert file %s: %v", ctx.Config.TLSCACertFile, err)
 		} else {
@@ -60,15 +70,19 @@ func NewPricingAPIClient(ctx *config.RunContext) *PricingAPIClient {
 	}
 
 	if ctx.Config.TLSInsecureSkipVerify != nil {
-		tlsConfig.InsecureSkipVerify = *ctx.Config.TLSInsecureSkipVerify
+		tlsConfig.InsecureSkipVerify = *ctx.Config.TLSInsecureSkipVerify // nolint: gosec
 	}
+
+	client := retryablehttp.NewClient()
+	client.Logger = &LeveledLogger{Logger: logging.Logger.WithField("library", "retryablehttp")}
+	client.HTTPClient.Transport.(*http.Transport).TLSClientConfig = &tlsConfig
 
 	return &PricingAPIClient{
 		APIClient: APIClient{
-			endpoint:  ctx.Config.PricingAPIEndpoint,
-			apiKey:    ctx.Config.APIKey,
-			tlsConfig: &tlsConfig,
-			uuid:      ctx.UUID(),
+			httpClient: client.StandardClient(),
+			endpoint:   ctx.Config.PricingAPIEndpoint,
+			apiKey:     ctx.Config.APIKey,
+			uuid:       ctx.UUID(),
 		},
 		Currency:       currency,
 		EventsDisabled: ctx.Config.EventsDisabled,
@@ -80,9 +94,18 @@ func (c *PricingAPIClient) AddEvent(name string, env map[string]interface{}) err
 		return nil
 	}
 
+	filtered := make(map[string]interface{})
+	for k, v := range env {
+		if _, ok := excludedEnv[k]; ok {
+			continue
+		}
+
+		filtered[k] = v
+	}
+
 	d := map[string]interface{}{
 		"event": name,
-		"env":   env,
+		"env":   filtered,
 	}
 
 	_, err := c.doRequest("POST", "/event", d)

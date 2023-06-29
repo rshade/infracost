@@ -12,7 +12,6 @@
 
 
 
-
 <!doctype html>
 <html>
   <head>
@@ -573,7 +572,20 @@ iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7O
     <td class="name">
       
       <span class="arrow">&#8627;</span>
-      Duration
+      Ephemeral storage
+    </td>
+    
+      <td colspan="3" class="usage-cost">Cost depends on usage: $0.0000000309 per GB-seconds</td>
+    
+  </tr>
+
+  
+    
+  <tr class="cost-component">
+    <td class="name">
+      
+      <span class="arrow">&#8627;</span>
+      Duration (first 6B)
     </td>
     
       <td colspan="3" class="usage-cost">Cost depends on usage: $0.0000166667 per GB-seconds</td>
@@ -627,7 +639,20 @@ iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAMAAABlApw1AAAABGdBTUEAALGPC/xhBQAAAAFzUkdCAK7O
     <td class="name">
       
       <span class="arrow">&#8627;</span>
-      Duration
+      Ephemeral storage
+    </td>
+    
+      <td colspan="3" class="usage-cost">Cost depends on usage: $0.0000000309 per GB-seconds</td>
+    
+  </tr>
+
+  
+    
+  <tr class="cost-component">
+    <td class="name">
+      
+      <span class="arrow">&#8627;</span>
+      Duration (first 6B)
     </td>
     
       <td colspan="3" class="usage-cost">Cost depends on usage: $0.0000166667 per GB-seconds</td>

@@ -1,6 +1,180 @@
 {
   "format_version": "1.0",
   "terraform_version": "1.1.0",
+  "prior_state": {
+    "values": {
+      "root_module": {
+        "child_modules": [
+          {
+            "resources": [
+              {
+                "address": "module.module1.aws_ecs_task_definition.ecs_task[0]",
+                "mode": "managed",
+                "type": "aws_ecs_task_definition",
+                "name": "ecs_task",
+                "index": 0,
+                "schema_version": 0,
+                "values": {
+                  "arn": "task-1-arn",
+                  "container_definitions": "\t\t\t[\n\t\t\t\t{\n\t\t\t\t\t\t\"command\": [\"sleep\", \"10\"],\n\t\t\t\t\t\t\"entryPoint\": [\"/\"],\n\t\t\t\t\t\t\"essential\": true,\n\t\t\t\t\t\t\"image\": \"alpine\",\n\t\t\t\t\t\t\"name\": \"alpine\",\n\t\t\t\t\t\t\"network_mode\": \"none\"\n\t\t\t\t}\n\t\t\t]\n",
+                  "cpu": "1 vCPU",
+                  "family": "ecs_task_module_1",
+                  "id": "task-1",
+                  "inference_accelerator": [
+                    {
+                      "device_name": "device1",
+                      "device_type": "eia2.medium"
+                    }
+                  ],
+                  "memory": "2 GB",
+                  "requires_compatibilities": [
+                    "FARGATE"
+                  ]
+                },
+                "infracost_metadata": {
+                  "calls": [
+                    {
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/main.tf",
+                      "blockName": "module.module1"
+                    },
+                    {
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                      "blockName": "aws_ecs_task_definition.ecs_task"
+                    }
+                  ],
+                  "checksum": "40f6429fb6ec11b145e9c44865ec17c1944c1a7cef0db118096f13cf29bfb8b0",
+                  "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                  "startLine": 6,
+                  "endLine": 30
+                }
+              },
+              {
+                "address": "module.module1.aws_ecs_service.ecs_service[0]",
+                "mode": "managed",
+                "type": "aws_ecs_service",
+                "name": "ecs_service",
+                "index": 0,
+                "schema_version": 0,
+                "values": {
+                  "arn": "svc-1-arn",
+                  "desired_count": 1,
+                  "id": "svc-1",
+                  "launch_type": "FARGATE",
+                  "name": "ecs_service_module_1",
+                  "task_definition": "ecs_task_module_1:mocked-task_definition"
+                },
+                "infracost_metadata": {
+                  "calls": [
+                    {
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/main.tf",
+                      "blockName": "module.module1"
+                    },
+                    {
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                      "blockName": "aws_ecs_service.ecs_service"
+                    }
+                  ],
+                  "checksum": "d3c2ce2c95dae9abc092f37146b8a5dab40afe96a7f613811fdf696174d90fe1",
+                  "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                  "startLine": 32,
+                  "endLine": 39
+                }
+              }
+            ],
+            "address": "module.module1",
+            "child_modules": [
+              {
+                "resources": [
+                  {
+                    "address": "module.module1.module.module2.aws_ecs_task_definition.ecs_task[0]",
+                    "mode": "managed",
+                    "type": "aws_ecs_task_definition",
+                    "name": "ecs_task",
+                    "index": 0,
+                    "schema_version": 0,
+                    "values": {
+                      "arn": "task-2-arn",
+                      "container_definitions": "\t\t\t[\n\t\t\t\t{\n\t\t\t\t\t\t\"command\": [\"sleep\", \"10\"],\n\t\t\t\t\t\t\"entryPoint\": [\"/\"],\n\t\t\t\t\t\t\"essential\": true,\n\t\t\t\t\t\t\"image\": \"alpine\",\n\t\t\t\t\t\t\"name\": \"alpine\",\n\t\t\t\t\t\t\"network_mode\": \"none\"\n\t\t\t\t}\n\t\t\t]\n",
+                      "cpu": "1 vCPU",
+                      "family": "ecs_task_module_2",
+                      "id": "task-2",
+                      "inference_accelerator": [
+                        {
+                          "device_name": "device1",
+                          "device_type": "eia2.medium"
+                        }
+                      ],
+                      "memory": "2 GB",
+                      "requires_compatibilities": [
+                        "FARGATE"
+                      ]
+                    },
+                    "infracost_metadata": {
+                      "calls": [
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/main.tf",
+                          "blockName": "module.module1"
+                        },
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                          "blockName": "module.module2"
+                        },
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                          "blockName": "aws_ecs_task_definition.ecs_task"
+                        }
+                      ],
+                      "checksum": "57c875c1fc903c5f6d5f63abde5e3c5b3ee2f368b7ce79f7eed17a16d710c658",
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                      "startLine": 6,
+                      "endLine": 30
+                    }
+                  },
+                  {
+                    "address": "module.module1.module.module2.aws_ecs_service.ecs_service[0]",
+                    "mode": "managed",
+                    "type": "aws_ecs_service",
+                    "name": "ecs_service",
+                    "index": 0,
+                    "schema_version": 0,
+                    "values": {
+                      "arn": "svc-2-arn",
+                      "desired_count": 1,
+                      "id": "svc-2",
+                      "launch_type": "FARGATE",
+                      "name": "ecs_service_module_2",
+                      "task_definition": "ecs_task_module_2:mocked-task_definition"
+                    },
+                    "infracost_metadata": {
+                      "calls": [
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/main.tf",
+                          "blockName": "module.module1"
+                        },
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                          "blockName": "module.module2"
+                        },
+                        {
+                          "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                          "blockName": "aws_ecs_service.ecs_service"
+                        }
+                      ],
+                      "checksum": "24062f2b3bf4a6d41ca253d8e735ae757ee8886f2dd946e746fe87ca2763919f",
+                      "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                      "startLine": 32,
+                      "endLine": 39
+                    }
+                  }
+                ],
+                "address": "module.module1.module.module2"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  },
   "planned_values": {
     "root_module": {
       "child_modules": [
@@ -41,7 +215,10 @@
                     "blockName": "aws_ecs_task_definition.ecs_task"
                   }
                 ],
-                "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf"
+                "checksum": "40f6429fb6ec11b145e9c44865ec17c1944c1a7cef0db118096f13cf29bfb8b0",
+                "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                "startLine": 6,
+                "endLine": 30
               }
             },
             {
@@ -70,7 +247,10 @@
                     "blockName": "aws_ecs_service.ecs_service"
                   }
                 ],
-                "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf"
+                "checksum": "d3c2ce2c95dae9abc092f37146b8a5dab40afe96a7f613811fdf696174d90fe1",
+                "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/main.tf",
+                "startLine": 32,
+                "endLine": 39
               }
             }
           ],
@@ -117,7 +297,10 @@
                         "blockName": "aws_ecs_task_definition.ecs_task"
                       }
                     ],
-                    "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf"
+                    "checksum": "57c875c1fc903c5f6d5f63abde5e3c5b3ee2f368b7ce79f7eed17a16d710c658",
+                    "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                    "startLine": 6,
+                    "endLine": 30
                   }
                 },
                 {
@@ -150,7 +333,10 @@
                         "blockName": "aws_ecs_service.ecs_service"
                       }
                     ],
-                    "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf"
+                    "checksum": "24062f2b3bf4a6d41ca253d8e735ae757ee8886f2dd946e746fe87ca2763919f",
+                    "filename": "testdata/hcl_provider_test/structures_module_expressions_correctly_with_count/modules/module1/modules/module2/main.tf",
+                    "startLine": 32,
+                    "endLine": 39
                   }
                 }
               ],
@@ -161,7 +347,7 @@
       ]
     }
   },
-  "resource_changes": [
+  "infracost_resource_changes": [
     {
       "address": "module.module1.aws_ecs_task_definition.ecs_task[0]",
       "module_address": "module.module1",

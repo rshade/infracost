@@ -12,12 +12,19 @@ Project: infracost/infracost/cmd/infracost/testdata/breakdown_terragrunt_hcldeps
                                                                                                                     
  aws_lambda_function.hello_world                                                                                    
  ├─ Requests                                          Monthly cost depends on usage: $0.20 per 1M requests          
- └─ Duration                                          Monthly cost depends on usage: $0.0000166667 per GB-seconds   
+ ├─ Ephemeral storage                                 Monthly cost depends on usage: $0.0000000309 per GB-seconds   
+ └─ Duration (first 6B)                               Monthly cost depends on usage: $0.0000166667 per GB-seconds   
                                                                                                                     
  OVERALL TOTAL                                                                                               $64.97 
 ──────────────────────────────────
 2 cloud resources were detected:
 ∙ 2 were estimated, all of which include usage-based costs, see https://infracost.io/usage-file
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Project                                                          ┃ Monthly cost ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━┫
+┃ infracost/infracost/cmd/infraco...deps_output_single_project/dev ┃ $65          ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 
 Err:
 

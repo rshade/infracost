@@ -8,27 +8,36 @@ import (
 
 func getLambdaFunctionRegistryItem() *schema.RegistryItem {
 	return &schema.RegistryItem{
-		Name:  "aws_lambda_function",
-		Notes: []string{"Provisioned concurrency is not yet supported."},
-		RFunc: NewLambdaFunction,
+		Name:      "aws_lambda_function",
+		CoreRFunc: NewLambdaFunction,
 	}
 }
 
-func NewLambdaFunction(d *schema.ResourceData, u *schema.UsageData) *schema.Resource {
+func NewLambdaFunction(d *schema.ResourceData) schema.CoreResource {
 	region := d.Get("region").String()
 	name := d.Get("function_name").String()
 	memorySize := int64(128)
+	architectures := string("x86_64")
+	storageSize := int64(512)
+
 	if d.Get("memory_size").Type != gjson.Null {
 		memorySize = d.Get("memory_size").Int()
 	}
 
-	a := &aws.LambdaFunction{
-		Address:    d.Address,
-		Region:     region,
-		Name:       name,
-		MemorySize: memorySize,
+	if len(d.Get("architectures").Array()) > 0 {
+		architectures = d.Get("architectures.0").String()
 	}
-	a.PopulateUsage(u)
 
-	return a.BuildResource()
+	if d.Get("ephemeral_storage").Type != gjson.Null {
+		storageSize = d.Get("ephemeral_storage.0.size").Int()
+	}
+
+	return &aws.LambdaFunction{
+		Address:      d.Address,
+		Region:       region,
+		Name:         name,
+		MemorySize:   memorySize,
+		Architecture: architectures,
+		StorageSize:  storageSize,
+	}
 }

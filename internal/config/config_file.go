@@ -17,10 +17,7 @@ const (
 	maxConfigFileVersion = "0.1"
 )
 
-var (
-	ErrorInvalidConfigFile = errors.New("parsing config file failed check file syntax")
-	ErrorNilProjects       = errors.New("no projects specified in config file, please specify at least one project, see https://infracost.io/config-file for file specification")
-)
+var ErrorInvalidConfigFile = errors.New("parsing config file failed, check file syntax")
 
 // YamlError is a custom error type that allows setting multiple
 // error messages under a base message. It is used to decipher
@@ -54,25 +51,25 @@ func (y *YamlError) isValid() bool {
 // YamlError.Error supports multiple nesting and can construct heavily indented output if needed.
 // e.g.
 //
-// 		&YamlError{
-//			base: "top message",
-//			errors: []error{
-//				errors.New("top error 1"),
-//				&YamlError{
-//					base: "child message",
-//					errors: []error{
-//						errors.New("child error 1"),
-//					},
+//	&YamlError{
+//		base: "top message",
+//		errors: []error{
+//			errors.New("top error 1"),
+//			&YamlError{
+//				base: "child message",
+//				errors: []error{
+//					errors.New("child error 1"),
 //				},
 //			},
-//		}
+//		},
+//	}
 //
 // would output a string like so:
 //
-//		top message:
-//			top error 1
-//			child message:
-//				child error 1
+//	top message:
+//		top error 1
+//		child message:
+//			child error 1
 //
 // This can be useful for ui error messages where you need to highlight issues
 // with specific fields/entries.
@@ -108,16 +105,16 @@ func (y *YamlError) Error() string {
 	return str
 }
 
-type fileSpec struct {
+type ConfigFileSpec struct {
 	Version  string     `yaml:"version"`
 	Projects []*Project `yaml:"projects" ignored:"true"`
 }
 
 // UnmarshalYAML implements the yaml.v2.Unmarshaller interface. Marshalls the
 // yaml into an intermediary struct so that we can catch field violations before
-// the data is set on the main fileSpec. Note this method must return a YamlError
+// the data is set on the main ConfigFileSpec. Note this method must return a YamlError
 // type so that we don't run into error collisions with the base yaml.v2 errors.
-func (f *fileSpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
+func (f *ConfigFileSpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	type roughFile struct {
 		Version  string                   `yaml:"version"`
 		Projects []map[string]interface{} `yaml:"projects"`
@@ -138,10 +135,6 @@ func (f *fileSpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		tag := v.Field(i).Tag.Get("yaml")
 		pieces := strings.Split(tag, ",")
 		allowedKeys[strings.TrimSpace(pieces[0])] = struct{}{}
-	}
-
-	if len(r.Projects) == 0 {
-		return &YamlError{raw: ErrorNilProjects}
 	}
 
 	validationError := &YamlError{
@@ -194,7 +187,7 @@ func (f *fileSpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
 		}
 	}
 
-	type fileSpecClone fileSpec
+	type fileSpecClone ConfigFileSpec
 	var c fileSpecClone
 	err = unmarshal(&c)
 	if err != nil {
@@ -206,8 +199,8 @@ func (f *fileSpec) UnmarshalYAML(unmarshal func(interface{}) error) error {
 	return nil
 }
 
-func loadConfigFile(path string) (fileSpec, error) {
-	var cfgFile fileSpec
+func LoadConfigFile(path string) (ConfigFileSpec, error) {
+	var cfgFile ConfigFileSpec
 
 	if !FileExists(path) {
 		return cfgFile, fmt.Errorf("config file does not exist at %s", path)

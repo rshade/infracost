@@ -18,11 +18,19 @@ func GetDefaultRefIDFunc(d *schema.ResourceData) []string {
 	return defaultRefs
 }
 
+func DefaultCloudResourceIDFunc(d *schema.ResourceData) []string {
+	return []string{}
+}
+
 func GetSpecialContext(d *schema.ResourceData) map[string]interface{} {
 	return map[string]interface{}{}
 }
 
 func GetResourceRegion(resourceType string, v gjson.Result) string {
+	if v.Get("region").Exists() && v.Get("region").String() != "" {
+		return v.Get("region").String()
+	}
+
 	return ""
 }
 

@@ -1,9 +1,11 @@
 package google
 
 import (
+	"github.com/shopspring/decimal"
+
+	"github.com/infracost/infracost/internal/logging"
 	"github.com/infracost/infracost/internal/resources"
 	"github.com/infracost/infracost/internal/schema"
-	"github.com/shopspring/decimal"
 )
 
 // ContainerNodePool struct represents Container Cluster's Node Pool resource.
@@ -43,17 +45,22 @@ func (r *ContainerNodePool) BuildResource() *schema.Resource {
 
 	poolSize := int64(1)
 
-	costComponents := []*schema.CostComponent{
-		computeCostComponent(r.Region, r.NodeConfig.MachineType, r.NodeConfig.PurchaseOption, poolSize, nil),
-		computeDiskCostComponent(r.Region, r.NodeConfig.DiskType, r.NodeConfig.DiskSize, poolSize),
+	costComponents, err := computeCostComponents(r.Region, r.NodeConfig.MachineType, r.NodeConfig.PurchaseOption, poolSize, nil)
+	if err != nil {
+		logging.Logger.Warnf("Skipping resource %s. %s", r.Address, err)
+		return nil
 	}
+
+	costComponents = append(costComponents, computeDiskCostComponent(r.Region, r.NodeConfig.DiskType, r.NodeConfig.DiskSize, poolSize))
 
 	if r.NodeConfig.LocalSSDCount > 0 {
 		costComponents = append(costComponents, scratchDiskCostComponent(r.Region, r.NodeConfig.PurchaseOption, int(r.NodeConfig.LocalSSDCount)))
 	}
 
 	for _, guestAccel := range r.NodeConfig.GuestAccelerators {
-		costComponents = append(costComponents, guestAcceleratorCostComponent(r.Region, r.NodeConfig.PurchaseOption, guestAccel.Type, guestAccel.Count, poolSize, nil))
+		if component := guestAcceleratorCostComponent(r.Region, r.NodeConfig.PurchaseOption, guestAccel.Type, guestAccel.Count, poolSize, nil); component != nil {
+			costComponents = append(costComponents, component)
+		}
 	}
 
 	resource := &schema.Resource{

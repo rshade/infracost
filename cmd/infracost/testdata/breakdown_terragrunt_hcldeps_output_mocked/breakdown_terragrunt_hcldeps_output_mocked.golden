@@ -13,7 +13,8 @@ Module path: dev
                                                                                                                     
  aws_lambda_function.hello_world                                                                                    
  ├─ Requests                                          Monthly cost depends on usage: $0.20 per 1M requests          
- └─ Duration                                          Monthly cost depends on usage: $0.0000166667 per GB-seconds   
+ ├─ Ephemeral storage                                 Monthly cost depends on usage: $0.0000000309 per GB-seconds   
+ └─ Duration (first 6B)                               Monthly cost depends on usage: $0.0000166667 per GB-seconds   
                                                                                                                     
  Project total                                                                                               $64.97 
 
@@ -33,7 +34,8 @@ Module path: prod
                                                                                                                       
  aws_lambda_function.hello_world                                                                                      
  ├─ Requests                                            Monthly cost depends on usage: $0.20 per 1M requests          
- └─ Duration                                            Monthly cost depends on usage: $0.0000166667 per GB-seconds   
+ ├─ Ephemeral storage                                   Monthly cost depends on usage: $0.0000000309 per GB-seconds   
+ └─ Duration (first 6B)                                 Monthly cost depends on usage: $0.0000166667 per GB-seconds   
                                                                                                                       
  Project total                                                                                                $747.64 
 
@@ -53,7 +55,8 @@ Module path: prod2
                                                                                                                       
  aws_lambda_function.hello_world                                                                                      
  ├─ Requests                                            Monthly cost depends on usage: $0.20 per 1M requests          
- └─ Duration                                            Monthly cost depends on usage: $0.0000166667 per GB-seconds   
+ ├─ Ephemeral storage                                   Monthly cost depends on usage: $0.0000000309 per GB-seconds   
+ └─ Duration (first 6B)                                 Monthly cost depends on usage: $0.0000166667 per GB-seconds   
                                                                                                                       
  Project total                                                                                                $747.64 
 
@@ -61,6 +64,14 @@ Module path: prod2
 ──────────────────────────────────
 6 cloud resources were detected:
 ∙ 6 were estimated, all of which include usage-based costs, see https://infracost.io/usage-file
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┓
+┃ Project                                                          ┃ Monthly cost ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━┫
+┃ infracost/infracost/cmd/infraco...runt_hcldeps_output_mocked/dev ┃ $65          ┃
+┃ infracost/infracost/cmd/infraco...unt_hcldeps_output_mocked/prod ┃ $748         ┃
+┃ infracost/infracost/cmd/infraco...nt_hcldeps_output_mocked/prod2 ┃ $748         ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━┛
 
 Err:
 

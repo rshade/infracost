@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/spf13/cobra"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,12 +52,12 @@ projects:
 			},
 		},
 		{
-			name: "should return error if no projects given",
+			name: "should not return error if no projects given",
 			contents: []byte(`version: 0.1
 
 projects:
 `),
-			error: &YamlError{raw: ErrorNilProjects},
+			expected: nil,
 		},
 		{
 			name: "should return panic error wrapped with invalid config file error",
@@ -122,10 +124,49 @@ projects:
 				}()
 			}
 
-			err = c.LoadFromConfigFile(path)
+			err = c.LoadFromConfigFile(path, &cobra.Command{})
 
 			require.Equal(t, tt.error, err)
 			require.EqualValues(t, tt.expected, c.Projects)
+		})
+	}
+}
+
+func TestConfig_CachePath(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected string
+	}{
+		{
+			name:     "should return the root directory with no .infracost directory in either the root or parent directories",
+			path:     "testdata/no_cache_init",
+			expected: "testdata/no_cache_init",
+		},
+		{
+			name:     "should return the parent directory with an infracost cache in the parent directory",
+			path:     "testdata/parent_cache_path/parent/child",
+			expected: "testdata/parent_cache_path/parent",
+		},
+		{
+			name:     "should return the root directory path with an infracost cache in the root directory",
+			path:     "testdata/root_cache_path/parent/child",
+			expected: "testdata/root_cache_path/parent/child",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := Config{
+				RootPath: tt.path,
+			}
+
+			actual := c.CachePath()
+			if filepath.IsAbs(actual) {
+				wd, _ := os.Getwd()
+				actual, _ = filepath.Rel(wd, actual)
+			}
+			assert.Equal(t, tt.expected, actual)
 		})
 	}
 }

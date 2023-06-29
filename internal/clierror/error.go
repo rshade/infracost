@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 
 	"github.com/maruel/panicparse/v2/stack"
 	log "github.com/sirupsen/logrus"
@@ -82,7 +81,7 @@ func processStack(rawStack []byte) ([]byte, error) {
 	var buf bytes.Buffer
 	w := bufio.NewWriter(&buf)
 
-	s, suffix, err := stack.ScanSnapshot(stream, ioutil.Discard, stack.DefaultOpts())
+	s, suffix, err := stack.ScanSnapshot(stream, io.Discard, stack.DefaultOpts())
 	if err != nil && err != io.EOF {
 		return []byte{}, err
 	}
@@ -120,7 +119,7 @@ func processStack(rawStack []byte) ([]byte, error) {
 			_, err := fmt.Fprintf(w,
 				"   %-*s %s()\n",
 				srcLen,
-				fmt.Sprintf("%s:%d", line.ImportPath, line.Line),
+				fmt.Sprintf("%s:%d", line.RelSrcPath, line.Line),
 				line.Func.Name)
 			if err != nil {
 				return []byte{}, err
@@ -149,4 +148,25 @@ func processStack(rawStack []byte) ([]byte, error) {
 	w.Flush()
 
 	return buf.Bytes(), nil
+}
+
+// WarningError is an error that adhears to the error interface but is used to convey
+// a non-critical path in the application code. WarningError messages should be considered
+// safe to display to the user.
+type WarningError struct {
+	warning string
+}
+
+// NewWarning returns a new WarningError using warning as the error string.
+func NewWarning(warning string) WarningError {
+	return WarningError{warning: warning}
+}
+
+// NewWarningF returns a new WarningError using the warning as a formatted string.
+func NewWarningF(warning string, args ...any) WarningError {
+	return WarningError{warning: fmt.Sprintf(warning, args...)}
+}
+
+func (w WarningError) Error() string {
+	return w.warning
 }

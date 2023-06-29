@@ -1,6 +1,8 @@
 package terraform
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -8,10 +10,10 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/pkg/errors"
-	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
 	"github.com/infracost/infracost/internal/config"
+	"github.com/infracost/infracost/internal/logging"
 	"github.com/infracost/infracost/internal/providers/terraform/aws"
 	"github.com/infracost/infracost/internal/providers/terraform/azure"
 	"github.com/infracost/infracost/internal/providers/terraform/google"
@@ -34,7 +36,7 @@ func NewParser(ctx *config.ProjectContext, includePastResources bool) *Parser {
 	}
 }
 
-func (p *Parser) createResource(d *schema.ResourceData, u *schema.UsageData) *schema.Resource {
+func (p *Parser) createPartialResource(d *schema.ResourceData, u *schema.UsageData) *schema.PartialResource {
 	registryMap := GetResourceRegistryMap()
 
 	for cKey, cValue := range getSpecialContext(d) {
@@ -43,42 +45,51 @@ func (p *Parser) createResource(d *schema.ResourceData, u *schema.UsageData) *sc
 
 	if registryItem, ok := (*registryMap)[d.Type]; ok {
 		if registryItem.NoPrice {
-			return &schema.Resource{
-				Name:         d.Address,
-				ResourceType: d.Type,
-				Tags:         d.Tags,
-				IsSkipped:    true,
-				NoPrice:      true,
-				SkipMessage:  "Free resource.",
-				Metadata:     d.Metadata,
+			return &schema.PartialResource{
+				ResourceData: d,
+				Resource: &schema.Resource{
+					Name:        d.Address,
+					IsSkipped:   true,
+					NoPrice:     true,
+					SkipMessage: "Free resource.",
+				},
+				CloudResourceIDs: registryItem.CloudResourceIDFunc(d),
 			}
 		}
 
-		res := registryItem.RFunc(d, u)
-		if res != nil {
-			res.ResourceType = d.Type
-			res.Tags = d.Tags
-			res.Metadata = d.Metadata
-
-			if u != nil {
-				res.EstimationSummary = u.CalcEstimationSummary()
+		// Use the CoreRFunc to generate a CoreResource if possible.  This is
+		// the new/preferred way to create provider-agnostic resources that
+		// support advanced features such as Infracost Cloud usage estimates
+		// and actual costs.
+		if registryItem.CoreRFunc != nil {
+			coreRes := registryItem.CoreRFunc(d)
+			if coreRes != nil {
+				return &schema.PartialResource{ResourceData: d, CoreResource: coreRes, CloudResourceIDs: registryItem.CloudResourceIDFunc(d)}
 			}
-			return res
+		} else {
+			res := registryItem.RFunc(d, u)
+			if res != nil {
+				if u != nil {
+					res.EstimationSummary = u.CalcEstimationSummary()
+				}
+
+				return &schema.PartialResource{ResourceData: d, Resource: res, CloudResourceIDs: registryItem.CloudResourceIDFunc(d)}
+			}
 		}
 	}
 
-	return &schema.Resource{
-		Name:         d.Address,
-		ResourceType: d.Type,
-		Tags:         d.Tags,
-		IsSkipped:    true,
-		SkipMessage:  "This resource is not currently supported",
-		Metadata:     d.Metadata,
+	return &schema.PartialResource{
+		ResourceData: d,
+		Resource: &schema.Resource{
+			Name:        d.Address,
+			IsSkipped:   true,
+			SkipMessage: "This resource is not currently supported",
+		},
 	}
 }
 
-func (p *Parser) parseJSONResources(parsePrior bool, baseResources []*schema.Resource, usage map[string]*schema.UsageData, parsed, providerConf, conf, vars gjson.Result) []*schema.Resource {
-	var resources []*schema.Resource
+func (p *Parser) parseJSONResources(parsePrior bool, baseResources []*schema.PartialResource, usage schema.UsageMap, parsed, providerConf, conf, vars gjson.Result) []*schema.PartialResource {
+	var resources []*schema.PartialResource
 	resources = append(resources, baseResources...)
 	var vals gjson.Result
 
@@ -97,12 +108,11 @@ func (p *Parser) parseJSONResources(parsePrior bool, baseResources []*schema.Res
 	resData := p.parseResourceData(isState, providerConf, vals, conf, vars)
 
 	p.parseReferences(resData, conf)
-	p.loadInfracostProviderUsageData(usage, resData)
 	p.stripDataResources(resData)
 	p.populateUsageData(resData, usage)
 
 	for _, d := range resData {
-		if r := p.createResource(d, d.UsageData); r != nil {
+		if r := p.createPartialResource(d, d.UsageData); r != nil {
 			resources = append(resources, r)
 		}
 	}
@@ -112,21 +122,13 @@ func (p *Parser) parseJSONResources(parsePrior bool, baseResources []*schema.Res
 
 // populateUsageData finds the UsageData for each ResourceData and sets the ResourceData.UsageData field
 // in case it is needed when processing a reference attribute
-func (p *Parser) populateUsageData(resData map[string]*schema.ResourceData, usage map[string]*schema.UsageData) {
+func (p *Parser) populateUsageData(resData map[string]*schema.ResourceData, usage schema.UsageMap) {
 	for _, d := range resData {
-		if ud := usage[d.Address]; ud != nil {
-			d.UsageData = ud
-		} else if strings.HasSuffix(d.Address, "]") {
-			lastIndexOfOpenBracket := strings.LastIndex(d.Address, "[")
-
-			if arrayUsageData := usage[fmt.Sprintf("%s[*]", d.Address[:lastIndexOfOpenBracket])]; arrayUsageData != nil {
-				d.UsageData = arrayUsageData
-			}
-		}
+		d.UsageData = usage.Get(d.Address)
 	}
 }
 
-func (p *Parser) parseJSON(j []byte, usage map[string]*schema.UsageData) ([]*schema.Resource, []*schema.Resource, error) {
+func (p *Parser) parseJSON(j []byte, usage schema.UsageMap) ([]*schema.PartialResource, []*schema.PartialResource, error) {
 	baseResources := p.loadUsageFileResources(usage)
 
 	j, _ = StripSetupTerraformWrapper(j)
@@ -145,6 +147,16 @@ func (p *Parser) parseJSON(j []byte, usage map[string]*schema.UsageData) ([]*sch
 	resources := p.parseJSONResources(false, baseResources, usage, parsed, providerConf, conf, vars)
 	if !p.includePastResources {
 		return nil, resources, nil
+	}
+
+	if !parsed.Get("prior_state").Exists() {
+		return nil, resources, nil
+	}
+
+	// Check if the prior state is the same as the planned state
+	// and if so we can just return pointers to the same resources
+	if gjsonEqual(parsed.Get("prior_state.values.root_module"), parsed.Get("planned_values.root_module")) {
+		return resources, resources, nil
 	}
 
 	pastResources := p.parseJSONResources(true, baseResources, usage, parsed, providerConf, conf, vars)
@@ -168,17 +180,17 @@ func StripSetupTerraformWrapper(b []byte) ([]byte, bool) {
 	return stripped, len(stripped) != len(b)
 }
 
-func (p *Parser) loadUsageFileResources(u map[string]*schema.UsageData) []*schema.Resource {
-	resources := make([]*schema.Resource, 0)
+func (p *Parser) loadUsageFileResources(u schema.UsageMap) []*schema.PartialResource {
+	resources := make([]*schema.PartialResource, 0)
 
-	for k, v := range u {
+	for k, v := range u.Data() {
 		for _, t := range GetUsageOnlyResources() {
 			if strings.HasPrefix(k, fmt.Sprintf("%s.", t)) {
 				d := schema.NewResourceData(t, "global", k, map[string]string{}, gjson.Result{})
 				// set the usage data as a field on the resource data in case it is needed when
 				// processing reference attributes.
 				d.UsageData = v
-				if r := p.createResource(d, v); r != nil {
+				if r := p.createPartialResource(d, v); r != nil {
 					resources = append(resources, r)
 				}
 			}
@@ -193,10 +205,10 @@ func (p *Parser) loadUsageFileResources(u map[string]*schema.UsageData) []*schem
 // is run with `-target` then all resources still appear in prior_state but not
 // in planned_values. This makes sure we remove any non-target resources from
 // the past resources so that we only show resources matching the target.
-func stripNonTargetResources(pastResources []*schema.Resource, resources []*schema.Resource, resourceChanges []gjson.Result) []*schema.Resource {
+func stripNonTargetResources(pastResources []*schema.PartialResource, resources []*schema.PartialResource, resourceChanges []gjson.Result) []*schema.PartialResource {
 	resourceAddrMap := make(map[string]bool, len(resources))
 	for _, resource := range resources {
-		resourceAddrMap[resource.Name] = true
+		resourceAddrMap[resource.ResourceData.Address] = true
 	}
 
 	diffAddrMap := make(map[string]bool, len(resourceChanges))
@@ -204,10 +216,10 @@ func stripNonTargetResources(pastResources []*schema.Resource, resources []*sche
 		diffAddrMap[change.Get("address").String()] = true
 	}
 
-	var filteredResources []*schema.Resource
+	var filteredResources []*schema.PartialResource
 	for _, resource := range pastResources {
-		_, rOk := resourceAddrMap[resource.Name]
-		_, dOk := diffAddrMap[resource.Name]
+		_, rOk := resourceAddrMap[resource.ResourceData.Address]
+		_, dOk := diffAddrMap[resource.ResourceData.Address]
 		if dOk || rOk {
 			filteredResources = append(filteredResources, resource)
 		}
@@ -244,8 +256,13 @@ func (p *Parser) parseResourceData(isState bool, providerConf, planVals gjson.Re
 
 		resConf := getConfJSON(conf, addr)
 
-		// Try getting the region from the ARN
-		region := resourceRegion(t, v)
+		// Override the region when requested
+		region := overrideRegion(addr, t, p.ctx.RunContext.Config)
+
+		// If not overridden try getting the region from the ARN
+		if region == "" {
+			region = resourceRegion(t, v)
+		}
 
 		// Otherwise use region from the provider conf
 		if region == "" {
@@ -272,7 +289,7 @@ func (p *Parser) parseResourceData(isState bool, providerConf, planVals gjson.Re
 }
 
 func getSpecialContext(d *schema.ResourceData) map[string]interface{} {
-	providerPrefix := strings.Split(d.Type, "_")[0]
+	providerPrefix := getProviderPrefix(d.Type)
 
 	switch providerPrefix {
 	case "aws":
@@ -282,14 +299,13 @@ func getSpecialContext(d *schema.ResourceData) map[string]interface{} {
 	case "google":
 		return google.GetSpecialContext(d)
 	default:
-		log.Debugf("Unsupported provider %s", providerPrefix)
+		logging.Logger.Debugf("Unsupported provider %s", providerPrefix)
 		return map[string]interface{}{}
 	}
 }
 
 func parseTags(resourceType string, v gjson.Result) map[string]string {
-
-	providerPrefix := strings.Split(resourceType, "_")[0]
+	providerPrefix := getProviderPrefix(resourceType)
 
 	switch providerPrefix {
 	case "aws":
@@ -299,14 +315,35 @@ func parseTags(resourceType string, v gjson.Result) map[string]string {
 	case "google":
 		return google.ParseTags(resourceType, v)
 	default:
-		log.Debugf("Unsupported provider %s", providerPrefix)
+		logging.Logger.Debugf("Unsupported provider %s", providerPrefix)
 		return map[string]string{}
 	}
 }
 
-func resourceRegion(resourceType string, v gjson.Result) string {
+func overrideRegion(addr string, resourceType string, config *config.Config) string {
+	region := ""
+	providerPrefix := getProviderPrefix(resourceType)
 
-	providerPrefix := strings.Split(resourceType, "_")[0]
+	switch providerPrefix {
+	case "aws":
+		region = config.AWSOverrideRegion
+	case "azurerm":
+		region = config.AzureOverrideRegion
+	case "google":
+		region = config.GoogleOverrideRegion
+	default:
+		logging.Logger.Debugf("Unsupported provider %s", providerPrefix)
+	}
+
+	if region != "" {
+		logging.Logger.Debugf("Overriding region (%s) for %s", region, addr)
+	}
+
+	return region
+}
+
+func resourceRegion(resourceType string, v gjson.Result) string {
+	providerPrefix := getProviderPrefix(resourceType)
 
 	switch providerPrefix {
 	case "aws":
@@ -316,7 +353,7 @@ func resourceRegion(resourceType string, v gjson.Result) string {
 	case "google":
 		return google.GetResourceRegion(resourceType, v)
 	default:
-		log.Debugf("Unsupported provider %s", providerPrefix)
+		logging.Logger.Debugf("Unsupported provider %s", providerPrefix)
 		return ""
 	}
 }
@@ -334,7 +371,7 @@ func providerRegion(addr string, providerConf gjson.Result, vars gjson.Result, r
 
 	if region == "" {
 		// Try to get the provider key from the first part of the resource
-		providerPrefix := strings.Split(resourceType, "_")[0]
+		providerPrefix := getProviderPrefix(resourceType)
 		region = parseRegion(providerConf, vars, providerPrefix)
 
 		if region == "" {
@@ -351,12 +388,21 @@ func providerRegion(addr string, providerConf gjson.Result, vars gjson.Result, r
 			// Don't show this log for azurerm users since they have a different method of looking up the region.
 			// A lot of Azure resources get their region from their referenced azurerm_resource_group resource
 			if region != "" && providerPrefix != "azurerm" {
-				log.Debugf("Falling back to default region (%s) for %s", region, addr)
+				logging.Logger.Debugf("Falling back to default region (%s) for %s", region, addr)
 			}
 		}
 	}
 
 	return region
+}
+
+func getProviderPrefix(resourceType string) string {
+	providerPrefix := strings.Split(resourceType, "_")
+	if len(providerPrefix) == 0 {
+		return ""
+	}
+
+	return providerPrefix[0]
 }
 
 func parseProviderKey(resConf gjson.Result) string {
@@ -390,24 +436,6 @@ func parseRegion(providerConf gjson.Result, vars gjson.Result, providerKey strin
 	}
 
 	return region
-}
-
-func (p *Parser) loadInfracostProviderUsageData(u map[string]*schema.UsageData, resData map[string]*schema.ResourceData) {
-	log.Debugf("Loading usage data from Infracost provider resources")
-
-	for _, d := range resData {
-		if isInfracostResource(d) {
-			p.ctx.SetContextValue("terraformInfracostProviderEnabled", true)
-
-			for _, ref := range d.References("resources") {
-				if _, ok := u[ref.Address]; !ok {
-					u[ref.Address] = schema.NewUsageData(ref.Address, convertToUsageAttributes(d.RawValues))
-				} else {
-					log.Debugf("Skipping loading usage for resource %s since it has already been defined", ref.Address)
-				}
-			}
-		}
-	}
 }
 
 func (p *Parser) stripDataResources(resData map[string]*schema.ResourceData) {
@@ -532,14 +560,14 @@ func (p *Parser) parseConfReferences(resData map[string]*schema.ResourceData, co
 				refData, ok = resData[a]
 
 				if ok {
-					log.Debugf("reference specifies a count: using resource %s for %s.%s", a, d.Address, attr)
+					logging.Logger.Debugf("reference specifies a count: using resource %s for %s.%s", a, d.Address, attr)
 				}
 			} else if containsString(refs, "each.key") {
 				a := fmt.Sprintf("%s[\"%s\"]", refAddr, addressKey(d.Address))
 				refData, ok = resData[a]
 
 				if ok {
-					log.Debugf("reference specifies a key: using resource %s for %s.%s", a, d.Address, attr)
+					logging.Logger.Debugf("reference specifies a key: using resource %s for %s.%s", a, d.Address, attr)
 				}
 			}
 		}
@@ -550,7 +578,7 @@ func (p *Parser) parseConfReferences(resData map[string]*schema.ResourceData, co
 			refData, ok = resData[a]
 
 			if ok {
-				log.Debugf("reference does not specify a count: using resource %s for for %s.%s", a, d.Address, attr)
+				logging.Logger.Debugf("reference does not specify a count: using resource %s for for %s.%s", a, d.Address, attr)
 			}
 		}
 
@@ -562,16 +590,6 @@ func (p *Parser) parseConfReferences(resData map[string]*schema.ResourceData, co
 	}
 
 	return found
-}
-
-func convertToUsageAttributes(j gjson.Result) map[string]gjson.Result {
-	a := make(map[string]gjson.Result)
-
-	for k, v := range j.Map() {
-		a[k] = v.Get("0.value")
-	}
-
-	return a
 }
 
 func getConfJSON(conf gjson.Result, addr string) gjson.Result {
@@ -773,4 +791,24 @@ func parseKnownModuleRefs(resData map[string]*schema.ResourceData, conf gjson.Re
 			}
 		}
 	}
+}
+
+func gjsonEqual(a, b gjson.Result) bool {
+	var err error
+
+	var aOut bytes.Buffer
+	err = json.Compact(&aOut, []byte(a.Raw))
+	if err != nil {
+		logging.Logger.Debugf("error indenting JSON: %s", err)
+		return false
+	}
+
+	var bOut bytes.Buffer
+	err = json.Compact(&bOut, []byte(b.Raw))
+	if err != nil {
+		logging.Logger.Debugf("error indenting JSON: %s", err)
+		return false
+	}
+
+	return aOut.String() == bOut.String()
 }

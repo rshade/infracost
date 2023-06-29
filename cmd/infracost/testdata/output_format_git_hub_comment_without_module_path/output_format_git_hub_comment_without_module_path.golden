@@ -1,0 +1,50 @@
+
+<p>💰 Infracost estimate: <b>monthly cost will not change</b></p>
+<table>
+  <thead>
+    <td>Project</td>
+    <td>Cost change</td>
+    <td>New monthly cost</td>
+  </thead>
+  <tbody>
+    <tr>
+      <td>different_name_plan</td>
+      <td>$0</td>
+      <td align="right">$41</td>
+    </tr>
+  </tbody>
+</table>
+<details>
+<summary><strong>Infracost output</strong></summary>
+
+```
+──────────────────────────────────
+Project: different_name_plan
+
++ aws_instance.instance_2
+  Monthly cost depends on usage
+
+    + Instance usage (Linux/UNIX, on-demand, t3.nano)
+      Monthly cost depends on usage
+        +$0.0052 per hours
+
+    + CPU credits
+      Monthly cost depends on usage
+        +$0.05 per vCPU-hours
+
+    + root_block_device
+    
+        + Storage (general purpose SSD, gp2)
+          Monthly cost depends on usage
+            +$0.10 per GB
+
+Monthly cost change for different_name_plan
+Amount:  $0.00 ($41 → $41)
+Percent: 0%
+
+──────────────────────────────────
+Key: ~ changed, + added, - removed
+
+```
+</details>
+

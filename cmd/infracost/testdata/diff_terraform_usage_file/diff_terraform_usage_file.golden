@@ -1,3 +1,4 @@
+──────────────────────────────────
 Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
 
 + aws_instance.web_app
@@ -9,7 +10,7 @@ Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
     + root_block_device
     
         + Storage (general purpose SSD, gp2)
-          +$5.00
+          +$5
 
     + ebs_block_device[0]
     
@@ -17,7 +18,7 @@ Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
           +$125
     
         + Provisioned IOPS
-          +$52.00
+          +$52
 
 + aws_instance.zero_cost_instance
   +$182
@@ -28,7 +29,7 @@ Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
     + root_block_device
     
         + Storage (general purpose SSD, gp2)
-          +$5.00
+          +$5
 
     + ebs_block_device[0]
     
@@ -36,16 +37,22 @@ Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
           +$125
     
         + Provisioned IOPS
-          +$52.00
+          +$52
 
 + aws_lambda_function.hello_world
   +$437
 
     + Requests
-      +$20.00
+      +$20
 
-    + Duration
+    + Ephemeral storage
+      $0.00
+
+    + Duration (first 6B)
       +$417
+
+    + Duration (over 15B)
+      $0.00
 
 + aws_lambda_function.zero_cost_lambda
   $0.00
@@ -53,7 +60,13 @@ Project: infracost/infracost/cmd/infracost/testdata/example_plan.json
     + Requests
       $0.00
 
-    + Duration
+    + Ephemeral storage
+      $0.00
+
+    + Duration (first 6B)
+      $0.00
+
+    + Duration (over 15B)
       $0.00
 
 + aws_s3_bucket.usage
@@ -84,6 +97,13 @@ Key: ~ changed, + added, - removed
 
 5 cloud resources were detected:
 ∙ 5 were estimated, all of which include usage-based costs, see https://infracost.io/usage-file
+
+Infracost estimate: monthly cost will increase by $1,361 ↑
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━┓
+┃ Project                                                      ┃ Cost change ┃ New monthly cost ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━┫
+┃ infracost/infracost/cmd/infracost/testdata/example_plan.json ┃     +$1,361 ┃ $1,361           ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┻━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━━━━┛
 
 Err:
 

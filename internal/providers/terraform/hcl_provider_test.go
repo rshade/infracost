@@ -16,7 +16,10 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/zclconf/go-cty/cty"
 
+	"github.com/infracost/infracost/internal/config"
 	"github.com/infracost/infracost/internal/hcl"
+	"github.com/infracost/infracost/internal/hcl/modules"
+	"github.com/infracost/infracost/internal/sync"
 )
 
 func setMockAttributes(blockAtts map[string]map[string]string) hcl.SetAttributesFunc {
@@ -75,8 +78,9 @@ func addAttrs(attrs map[string]string, body *hclsyntax.Body) {
 
 func TestHCLProvider_LoadPlanJSON(t *testing.T) {
 	tests := []struct {
-		name  string
-		attrs map[string]map[string]string
+		name     string
+		attrs    map[string]map[string]string
+		warnings []hcl.WarningCode
 	}{
 		{
 			name: "structures module expressions correctly with count",
@@ -153,6 +157,28 @@ func TestHCLProvider_LoadPlanJSON(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "does not panic on double attribute definition",
+			attrs: map[string]map[string]string{
+				"aws_eip.invalid_eip": {
+					"id":  "eip",
+					"arn": "eip-arn",
+				},
+			},
+		},
+		{
+			name: "populates warnings on missing vars",
+			attrs: map[string]map[string]string{
+				"aws_eip.eip": {
+					"id":  "eip",
+					"arn": "eip-arn",
+				},
+			},
+			warnings: []hcl.WarningCode{hcl.WarningMissingVars},
+		},
+		{
+			name: "shows correct duplicate variable warning",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -161,27 +187,30 @@ func TestHCLProvider_LoadPlanJSON(t *testing.T) {
 
 			logger := logrus.New()
 			logger.SetOutput(io.Discard)
+			entry := logrus.NewEntry(logger)
+
 			parsers, err := hcl.LoadParsers(
 				testPath,
-				[]string{},
-				logrus.NewEntry(logger),
+				modules.NewModuleLoader(testPath, nil, config.TerraformSourceMap{}, entry, &sync.KeyMutex{}),
+				nil,
+				entry,
 				hcl.OptionWithBlockBuilder(
 					hcl.BlockBuilder{
 						MockFunc: func(a *hcl.Attribute) cty.Value {
 							return cty.StringVal(fmt.Sprintf("mocked-%s", a.Name()))
 						},
 						SetAttributes: []hcl.SetAttributesFunc{setMockAttributes(tt.attrs)},
-						Logger:        logrus.NewEntry(logger),
+						Logger:        entry,
 					},
-				),
-			)
+				))
 			require.NoError(t, err)
 
 			p := HCLProvider{
 				parsers: parsers,
-				logger:  logrus.NewEntry(logger),
+				logger:  entry,
+				ctx:     &config.ProjectContext{RunContext: &config.RunContext{Config: &config.Config{}}},
 			}
-			got, err := p.LoadPlanJSONs()
+			got := p.LoadPlanJSONs()
 			require.NoError(t, err)
 
 			tmpl, err := template.ParseFiles(path.Join(testPath, "expected.json"))
@@ -192,8 +221,17 @@ func TestHCLProvider_LoadPlanJSON(t *testing.T) {
 			require.NoError(t, err)
 
 			expected := exp.String()
-			actual := string(got[0].json)
+			root := got[0]
+			actual := string(root.JSON)
 			assert.JSONEq(t, expected, actual)
+
+			codes := make([]hcl.WarningCode, len(root.Module.Warnings))
+			for i, w := range root.Module.Warnings {
+				codes[i] = w.Code
+			}
+
+			assert.Len(t, codes, len(tt.warnings), "unexpected warning length")
+			assert.ElementsMatch(t, codes, tt.warnings)
 		})
 	}
 }

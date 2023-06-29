@@ -3,7 +3,6 @@ provider "aws" {
   skip_credentials_validation = true
   skip_metadata_api_check     = true
   skip_requesting_account_id  = true
-  skip_get_ec2_platforms      = true
   skip_region_validation      = true
   access_key                  = "mock_access_key"
   secret_key                  = "mock_secret_key"
@@ -252,4 +251,19 @@ resource "aws_instance" "instance_detailedMonitoring_withMonthlyHours" {
   ami           = "fake_ami"
   instance_type = "m3.large"
   monitoring    = true
+}
+
+resource "aws_ec2_host" "mac" {
+  instance_type     = "mac1.metal"
+  availability_zone = "us-east-2a"
+}
+
+resource "aws_instance" "with_host" {
+  ami           = "fake_ami"
+  instance_type = "fake" # TF requires it
+  host_id       = aws_ec2_host.mac.id
+
+  root_block_device {
+    volume_size = 50
+  }
 }

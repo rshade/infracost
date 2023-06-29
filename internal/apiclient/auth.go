@@ -45,9 +45,11 @@ func (a AuthClient) Login(contextVals map[string]interface{}) (string, string, e
 
 	startURL := fmt.Sprintf("%s/login?%s", a.Host, q.Encode())
 
-	fmt.Println("\nIf the redirect doesn't work, use this URL:")
-	fmt.Printf("\n%s\n\n", startURL)
-	fmt.Printf("Waiting...\n\n")
+	fmt.Println("\nIf the redirect doesn't work, either:")
+	fmt.Println("- Use this URL:")
+	fmt.Printf("    %s\n", startURL)
+	fmt.Println("\n- Or log in/sign up at https://dashboard.infracost.io, copy your API key\n    from Org Settings and run `infracost configure set api_key MY_KEY`")
+	fmt.Printf("\nWaiting...\n\n")
 
 	_ = browser.OpenURL(startURL)
 
@@ -65,18 +67,13 @@ func (a AuthClient) startCallbackServer(listener net.Listener, generatedState st
 	go func() {
 		defer close(shutdown)
 
-		for {
-			select {
-			case <-time.After(time.Minute * 5):
-				shutdown <- callbackServerResp{err: fmt.Errorf("timeout")}
-				listener.Close()
-				return
-			}
-		}
+		time.Sleep(time.Minute * 5)
+		shutdown <- callbackServerResp{err: fmt.Errorf("timeout")}
+		listener.Close()
 	}()
 
 	go func() {
-		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = http.Serve(listener, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { // nolint: gosec
 			if r.Method == http.MethodOptions {
 				return
 			}
@@ -108,7 +105,12 @@ func (a AuthClient) startCallbackServer(listener net.Listener, generatedState st
 			}
 
 			http.Redirect(w, r, redirectTo, http.StatusTemporaryRedirect)
-			time.Sleep(3 * time.Second) // Sleep for a few seconds to make sure the redirect happens
+			// Flush the response, otherwise the HTTP redirect response doesn't always get sent
+			// before the server shuts down.
+			flusher, ok := w.(http.Flusher)
+			if ok {
+				flusher.Flush()
+			}
 			shutdown <- callbackServerResp{apiKey: apiKey, infoMsg: infoMsg}
 		}))
 	}()
@@ -120,7 +122,7 @@ func (a AuthClient) startCallbackServer(listener net.Listener, generatedState st
 	}
 
 	if resp.apiKey == "" || resp.err != nil {
-		return "", "", fmt.Errorf("Authentication failed. Please check your API token on %s", ui.LinkString("https://infracost.io"))
+		return "", "", fmt.Errorf("Authentication failed. Please get your API token from %s", ui.LinkString("https://dashboard.infracost.io"))
 	}
 
 	return resp.apiKey, "", nil

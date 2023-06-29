@@ -1,10 +1,11 @@
 package aws
 
 import (
-	"github.com/tidwall/gjson"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/tidwall/gjson"
 
 	"github.com/infracost/infracost/internal/resources/aws"
 	"github.com/infracost/infracost/internal/schema"
@@ -19,16 +20,23 @@ func getECSServiceRegistryItem() *schema.RegistryItem {
 }
 
 func NewECSService(d *schema.ResourceData, u *schema.UsageData) *schema.Resource {
-	var taskDefinition *schema.ResourceData
-
 	memoryGB := float64(0)
 	vcpu := float64(0)
 	inferenceAcceleratorDeviceType := ""
 
-	taskDefinitionRefs := d.References("task_definition")
-	if len(taskDefinitionRefs) > 0 {
-		taskDefinition = taskDefinitionRefs[0]
+	var taskDefinition *schema.ResourceData
+	// Since we are matching on 'family' as well as 'arn', check the resource type
+	// just in case the reference matches other resources as well. We should probably specify the
+	// expected resource types when we are building the references, but we don;t just now so
+	// this check should be sufficient.
+	for _, ref := range d.References("task_definition") {
+		if ref.Type == "aws_ecs_task_definition" {
+			taskDefinition = ref
+			break
+		}
+	}
 
+	if taskDefinition != nil {
 		memoryGB = parseVCPUMemoryString(taskDefinition.Get("memory").String())
 		vcpu = parseVCPUMemoryString(taskDefinition.Get("cpu").String())
 		inferenceAcceleratorDeviceType = taskDefinition.Get("inference_accelerator.0.device_type").String()
@@ -49,10 +57,10 @@ func NewECSService(d *schema.ResourceData, u *schema.UsageData) *schema.Resource
 }
 
 // calcLaunchType determines the launch type for the resource using the following precedence:
-//   1. aws_ecs_service.launch_type
-//   2. aws_ecs_service.capacity_provider_strategy
-//   3. aws_ecs_service.aws_ecs_cluster.default_capacity_provider_strategy
-//   4. aws_ecs_service.aws_ecs_cluster.aws_ecs_cluster_capacity_providers
+//  1. aws_ecs_service.launch_type
+//  2. aws_ecs_service.capacity_provider_strategy
+//  3. aws_ecs_service.aws_ecs_cluster.default_capacity_provider_strategy
+//  4. aws_ecs_service.aws_ecs_cluster.aws_ecs_cluster_capacity_providers
 func calcLaunchType(d *schema.ResourceData) string {
 	// Use the launch_type if it is set
 	launchType := d.Get("launch_type").String()
@@ -71,7 +79,7 @@ func calcLaunchType(d *schema.ResourceData) string {
 		cluster := clusterRefs[0]
 
 		// check the cluster for a default capacity provider
-
+		// for terraform-provider-aws v4
 		if defaultStrategies := cluster.Get("default_capacity_provider_strategy").Array(); len(defaultStrategies) > 0 {
 			launchType = getCapacityProviderLaunchType(defaultStrategies)
 			if launchType == "FARGATE" {

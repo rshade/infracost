@@ -79,17 +79,23 @@ func commentBitbucketCmd(ctx *config.RunContext) *cobra.Command {
 
 			paths, _ := cmd.Flags().GetStringArray("path")
 
-			body, err := buildCommentBody(cmd, ctx, paths, output.MarkdownOptions{
+			body, hasDiff, err := buildCommentBody(cmd, ctx, paths, output.MarkdownOptions{
 				WillUpdate:          prNumber != 0 && behavior == "update",
 				WillReplace:         prNumber != 0 && behavior == "delete-and-new",
-				IncludeFeedbackLink: true,
+				IncludeFeedbackLink: !ctx.Config.IsSelfHosted(),
 				OmitDetails:         extra.OmitDetails,
 				BasicSyntax:         true,
 			})
 			var policyFailure output.PolicyCheckFailures
+			var guardrailFailure output.GuardrailFailures
+			var tagPolicyFailure *output.TagPolicyCheck
 			if err != nil {
 				if v, ok := err.(output.PolicyCheckFailures); ok {
 					policyFailure = v
+				} else if v, ok := err.(output.GuardrailFailures); ok {
+					guardrailFailure = v
+				} else if v, ok := err.(output.TagPolicyCheck); ok {
+					tagPolicyFailure = &v
 				} else {
 					return err
 				}
@@ -97,7 +103,9 @@ func commentBitbucketCmd(ctx *config.RunContext) *cobra.Command {
 
 			dryRun, _ := cmd.Flags().GetBool("dry-run")
 			if !dryRun {
-				err = commentHandler.CommentWithBehavior(ctx.Context(), behavior, string(body))
+				skipNoDiff, _ := cmd.Flags().GetBool("skip-no-diff")
+
+				posted, err := commentHandler.CommentWithBehavior(ctx.Context(), !hasDiff && skipNoDiff, behavior, string(body))
 				if err != nil {
 					return err
 				}
@@ -108,7 +116,11 @@ func commentBitbucketCmd(ctx *config.RunContext) *cobra.Command {
 					logging.Logger.WithError(err).Error("could not report infracost-comment event")
 				}
 
-				cmd.Println("Comment posted to Bitbucket")
+				if posted {
+					cmd.Println("Comment posted to Bitbucket")
+				} else {
+					cmd.Println("Comment not posted to Bitbucket (skipped)")
+				}
 			} else {
 				cmd.Println(string(body))
 				cmd.Println("Comment not posted to Bitbucket (--dry-run was specified)")
@@ -116,6 +128,12 @@ func commentBitbucketCmd(ctx *config.RunContext) *cobra.Command {
 
 			if policyFailure != nil {
 				return policyFailure
+			}
+			if guardrailFailure != nil {
+				return guardrailFailure
+			}
+			if tagPolicyFailure != nil {
+				return tagPolicyFailure
 			}
 
 			return nil

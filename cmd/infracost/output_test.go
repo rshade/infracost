@@ -1,7 +1,7 @@
 package main_test
 
 import (
-	"io/ioutil"
+	"os"
 	"path"
 	"path/filepath"
 	"testing"
@@ -43,6 +43,14 @@ func TestOutputFormatGitHubComment(t *testing.T) {
 	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--path", "./testdata/example_out.json", "--path", "./testdata/terraform_v0.14_breakdown.json", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json"}, nil)
 }
 
+func TestOutputFormatGitHubCommentWithAllError(t *testing.T) {
+	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--path", "./testdata/errors.json"}, nil)
+}
+
+func TestOutputFormatGitHubCommentNoProject(t *testing.T) {
+	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--path", "./testdata/no_project.json"}, nil)
+}
+
 func TestOutputFormatGitHubCommentWithProjectNames(t *testing.T) {
 	testName := testutil.CalcGoldenFileTestdataDirName()
 	GoldenFileCommandTest(t, testName,
@@ -63,12 +71,35 @@ func TestOutputFormatGitHubCommentWithProjectNamesWithMetadata(t *testing.T) {
 		}, nil)
 }
 
+func TestOutputFormatGitHubCommentWithProjectErrors(t *testing.T) {
+	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(),
+		[]string{
+			"output",
+			"--format", "github-comment",
+			"--path", "./testdata/out_with_project_error.json",
+		}, nil)
+}
+
 func TestOutputFormatGitHubCommentMultipleSkipped(t *testing.T) {
 	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--path", "./testdata/example_out.json", "--path", "./testdata/terraform_v0.14_breakdown.json", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json"}, nil)
 }
 
+func TestOutputFormatGitHubCommentShowAllProjects(t *testing.T) {
+	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--show-all-projects", "--path", "./testdata/example_out.json", "--path", "./testdata/terraform_v0.14_breakdown.json", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json"}, nil)
+}
+
 func TestOutputFormatGitHubCommentNoChange(t *testing.T) {
 	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "github-comment", "--path", "./testdata/terraform_v0.14_nochange_breakdown.json"}, nil)
+}
+
+func TestOutputFormatGitHubCommentWithoutModulePath(t *testing.T) {
+	testName := testutil.CalcGoldenFileTestdataDirName()
+	GoldenFileCommandTest(t, testName,
+		[]string{
+			"output",
+			"--format", "github-comment",
+			"--path", path.Join("./testdata", testName, "infracost.json"),
+		}, nil)
 }
 
 func TestOutputFormatGitLabComment(t *testing.T) {
@@ -115,6 +146,10 @@ func TestOutputFormatTable(t *testing.T) {
 	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "table", "--path", "./testdata/example_out.json", "--path", "./testdata/azure_firewall_out.json"}, nil)
 }
 
+func TestOutputFormatTableWithError(t *testing.T) {
+	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--format", "table", "--path", "./testdata/out_with_project_error.json"}, nil)
+}
+
 func TestOutputTerraformFieldsAll(t *testing.T) {
 	GoldenFileCommandTest(t, testutil.CalcGoldenFileTestdataDirName(), []string{"output", "--path", "./testdata/example_out.json", "--path", "./testdata/azure_firewall_out.json", "--fields", "all"}, nil)
 }
@@ -126,7 +161,7 @@ func TestOutputTerraformOutFileHTML(t *testing.T) {
 
 	GoldenFileCommandTest(t, testdataName, []string{"output", "--path", "./testdata/example_out.json", "--format", "html", "--out-file", outputPath}, nil)
 
-	actual, err := ioutil.ReadFile(outputPath)
+	actual, err := os.ReadFile(outputPath)
 	require.Nil(t, err)
 	actual = stripDynamicValues(actual)
 
@@ -140,7 +175,7 @@ func TestOutputTerraformOutFileJSON(t *testing.T) {
 
 	GoldenFileCommandTest(t, testdataName, []string{"output", "--path", "./testdata/example_out.json", "--format", "json", "--out-file", outputPath}, nil)
 
-	actual, err := ioutil.ReadFile(outputPath)
+	actual, err := os.ReadFile(outputPath)
 	require.Nil(t, err)
 	actual = stripDynamicValues(actual)
 
@@ -154,7 +189,7 @@ func TestOutputTerraformOutFileTable(t *testing.T) {
 
 	GoldenFileCommandTest(t, testdataName, []string{"output", "--path", "./testdata/example_out.json", "--out-file", outputPath}, nil)
 
-	actual, err := ioutil.ReadFile(outputPath)
+	actual, err := os.ReadFile(outputPath)
 	require.Nil(t, err)
 	actual = stripDynamicValues(actual)
 

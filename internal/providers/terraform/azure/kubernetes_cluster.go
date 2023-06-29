@@ -26,7 +26,9 @@ func NewAzureRMKubernetesCluster(d *schema.ResourceData, u *schema.UsageData) *s
 		skuTier = d.Get("sku_tier").String()
 	}
 
-	if strings.ToLower(skuTier) == "paid" {
+	// Azure switched from "Paid" to "Standard" in API version 2023-02-01
+	// (Terraform Azure provider version v3.51.0)
+	if contains([]string{"paid", "standard"}, strings.ToLower(skuTier)) {
 		costComponents = append(costComponents, &schema.CostComponent{
 			Name:           "Uptime SLA",
 			Unit:           "hours",
@@ -38,7 +40,7 @@ func NewAzureRMKubernetesCluster(d *schema.ResourceData, u *schema.UsageData) *s
 				Service:       strPtr("Azure Kubernetes Service"),
 				ProductFamily: strPtr("Compute"),
 				AttributeFilters: []*schema.AttributeFilter{
-					{Key: "skuName", Value: strPtr("Standard")},
+					{Key: "meterName", Value: strPtr("Standard Uptime SLA")},
 				},
 			},
 			PriceFilter: &schema.PriceFilter{
@@ -51,14 +53,22 @@ func NewAzureRMKubernetesCluster(d *schema.ResourceData, u *schema.UsageData) *s
 	if d.Get("default_node_pool.0.node_count").Type != gjson.Null {
 		nodeCount = decimal.NewFromInt(d.Get("default_node_pool.0.node_count").Int())
 	}
+
+	// if the node count is not set explicitly let's take the min_count.
+	if d.Get("default_node_pool.0.min_count").Type != gjson.Null && nodeCount.Equal(decimal.NewFromInt(1)) {
+		nodeCount = decimal.NewFromInt(d.Get("default_node_pool.0.min_count").Int())
+	}
+
+	var defaultNodeUsage *schema.UsageData
 	if u != nil {
-		if v, ok := u.Get("default_node_pool").Map()["nodes"]; ok {
-			nodeCount = decimal.NewFromInt(v.Int())
+		defaultNodeUsage = schema.NewUsageData("default_node_pool", u.Get("default_node_pool").Map())
+		if defaultNodeUsage.Get("nodes").Exists() {
+			nodeCount = decimal.NewFromInt(defaultNodeUsage.Get("nodes").Int())
 		}
 	}
 
 	subResources = []*schema.Resource{
-		aksClusterNodePool("default_node_pool", region, d.Get("default_node_pool.0"), nodeCount, u),
+		aksClusterNodePool("default_node_pool", region, d.Get("default_node_pool.0"), nodeCount, defaultNodeUsage),
 	}
 
 	if d.Get("network_profile.0.load_balancer_sku").Type != gjson.Null {

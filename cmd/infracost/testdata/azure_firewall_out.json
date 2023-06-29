@@ -1,19 +1,21 @@
 {
   "version": "0.2",
+  "metadata": {
+    "infracostCommand": "breakdown",
+    "vcsBranch": "test",
+    "vcsCommitSha": "1234",
+    "vcsCommitAuthorName": "hugo",
+    "vcsCommitAuthorEmail": "hugo@test.com",
+    "vcsCommitTimestamp": "2021-10-11T22:41:00.144866-04:00",
+    "vcsCommitMessage": "mymessage",
+    "vcsRepositoryUrl": "https://github.com/infracost/infracost.git"
+  },
   "projects": [
     {
       "name": "infracost/infracost/cmd/infracost/testdata/azure_firewall_plan.json",
       "metadata": {
-        "infracostCommand": "breakdown",
-        "branch": "test",
-        "commit": "1234",
-        "commitAuthorName": "hugo",
-        "commitAuthorEmail": "hugo@test.com",
-        "commitTimestamp": "2021-10-11T22:41:00.144866-04:00",
-        "commitMessage": "mymessage",
         "path": "./cmd/infracost/testdata/azure_firewall_plan.json",
         "type": "terraform_plan_json",
-        "vcsRepoUrl": "https://github.com/infracost/infracost.git",
         "vcsSubPath": "cmd/infracost/testdata/azure_firewall_plan.json"
       },
       "pastBreakdown": {
@@ -25,6 +27,7 @@
         "resources": [
           {
             "name": "azurerm_firewall.non_usage",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -51,6 +54,7 @@
           },
           {
             "name": "azurerm_firewall.premium",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "0.875",
             "monthlyCost": "638.75",
@@ -77,6 +81,7 @@
           },
           {
             "name": "azurerm_firewall.premium_virtual_hub",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "0.875",
             "monthlyCost": "638.75",
@@ -103,6 +108,7 @@
           },
           {
             "name": "azurerm_firewall.standard",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -129,6 +135,7 @@
           },
           {
             "name": "azurerm_firewall.standard_virtual_hub",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -155,6 +162,7 @@
           },
           {
             "name": "azurerm_public_ip.example",
+            "resourceType": "azurerm_public_ip",
             "metadata": {},
             "hourlyCost": "0.005",
             "monthlyCost": "3.65",
@@ -178,6 +186,7 @@
         "resources": [
           {
             "name": "azurerm_firewall.non_usage",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -204,6 +213,7 @@
           },
           {
             "name": "azurerm_firewall.premium",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "0.875",
             "monthlyCost": "638.75",
@@ -230,6 +240,7 @@
           },
           {
             "name": "azurerm_firewall.premium_virtual_hub",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "0.875",
             "monthlyCost": "638.75",
@@ -256,6 +267,7 @@
           },
           {
             "name": "azurerm_firewall.standard",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -282,6 +294,7 @@
           },
           {
             "name": "azurerm_firewall.standard_virtual_hub",
+            "resourceType": "azurerm_firewall",
             "metadata": {},
             "hourlyCost": "1.25",
             "monthlyCost": "912.5",
@@ -308,6 +321,7 @@
           },
           {
             "name": "azurerm_public_ip.example",
+            "resourceType": "azurerm_public_ip",
             "metadata": {},
             "hourlyCost": "0.005",
             "monthlyCost": "3.65",

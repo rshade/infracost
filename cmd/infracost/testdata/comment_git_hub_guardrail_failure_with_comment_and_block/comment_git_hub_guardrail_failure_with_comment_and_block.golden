@@ -1,0 +1,16 @@
+Comment posted to GitHub
+
+
+Err:
+Error: Guardrail check failed:
+
+ - Stand by your estimate
+
+
+Logs:
+level=info msg="Estimate uploaded to Infracost Cloud"
+level=info msg="1 guardrail checked"
+level=info msg="guardrail check failed: Stand by your estimate"
+level=info msg="Creating new comment"
+level=warning msg=">\\n<summary><strong>❌ Guardrails triggered (needs action)</strong></summary>\\nThis change is blocked, either reduce the costs or wait for an admin to review and unblock it.\\n\\t\\t\\t\\t\\n> - <b>Blocked</b>: Stand by your estimate\\n</"
+level=info msg="Created new comment: "

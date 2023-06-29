@@ -2,7 +2,6 @@ package apiclient
 
 import (
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,14 +12,15 @@ import (
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 
+	"github.com/infracost/infracost/internal/logging"
 	"github.com/infracost/infracost/internal/version"
 )
 
 type APIClient struct {
-	endpoint  string
-	apiKey    string
-	tlsConfig *tls.Config
-	uuid      uuid.UUID
+	httpClient *http.Client
+	endpoint   string
+	apiKey     string
+	uuid       uuid.UUID
 }
 
 type GraphQLQuery struct {
@@ -54,6 +54,8 @@ func (c *APIClient) doQueries(queries []GraphQLQuery) ([]gjson.Result, error) {
 }
 
 func (c *APIClient) doRequest(method string, path string, d interface{}) ([]byte, error) {
+	logging.Logger.Debugf("'%s' request to '%s' using trace_id: '%s'", method, path, c.uuid.String())
+
 	reqBody, err := json.Marshal(d)
 	if err != nil {
 		return []byte{}, errors.Wrap(err, "Error generating request body")
@@ -66,12 +68,11 @@ func (c *APIClient) doRequest(method string, path string, d interface{}) ([]byte
 
 	c.AddAuthHeaders(req)
 
-	// Use the DefaultTransport since this handles the HTTP/HTTPS proxy and other defaults
-	// and add the TLS config that was passed into the client
-	transport := http.DefaultTransport.(*http.Transport)
-	transport.TLSClientConfig = c.tlsConfig
+	client := c.httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
 
-	client := &http.Client{Transport: transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return []byte{}, errors.Wrap(err, "Error sending API request")

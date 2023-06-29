@@ -9,7 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 )
 
-var roundCostsAbove = 100
+var roundCostsAbove = 1
 
 func formatQuantity(q *decimal.Decimal) string {
 	if q == nil {
@@ -23,13 +23,14 @@ func formatCost(currency string, d *decimal.Decimal) string {
 	if d == nil {
 		return "-"
 	}
-	if d.GreaterThanOrEqual(decimal.NewFromInt(int64(roundCostsAbove))) {
+
+	if d.Abs().GreaterThanOrEqual(decimal.NewFromInt(int64(roundCostsAbove))) {
 		return formatWholeDecimalCurrency(currency, *d)
 	}
 	return formatRoundedDecimalCurrency(currency, *d)
 }
 
-func formatCost2DP(currency string, d *decimal.Decimal) string {
+func FormatCost2DP(currency string, d *decimal.Decimal) string {
 	if d == nil {
 		return "-"
 	}
@@ -134,4 +135,28 @@ func truncateMiddle(s string, maxLen int, fill string) string {
 	truncated = append(truncated, r[int64(len(r))-endLen:]...)
 
 	return string(truncated)
+}
+
+func showProject(p Project, opts Options, showError bool) bool {
+	if p.Metadata.HasErrors() && showError {
+		return false
+	}
+
+	if opts.ShowOnlyChanges {
+		// only return true if the project has code changes so the table can also show
+		// project that have cost changes.
+		if p.Metadata.VCSCodeChanged != nil && *p.Metadata.VCSCodeChanged {
+			return true
+		}
+	}
+
+	if opts.ShowAllProjects {
+		return true
+	}
+
+	if p.Diff == nil || len(p.Diff.Resources) == 0 { // has no diff
+		return false
+	}
+
+	return true // has diff
 }

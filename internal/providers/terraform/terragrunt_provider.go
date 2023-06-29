@@ -69,6 +69,8 @@ func (p *TerragruntProvider) DisplayType() string {
 }
 
 func (p *TerragruntProvider) AddMetadata(metadata *schema.ProjectMetadata) {
+	metadata.ConfigSha = p.ctx.ProjectConfig.ConfigSha
+
 	basePath := p.ctx.ProjectConfig.Path
 	if p.ctx.RunContext.Config.ConfigFilePath != "" {
 		basePath = filepath.Dir(p.ctx.RunContext.Config.ConfigFilePath)
@@ -83,7 +85,7 @@ func (p *TerragruntProvider) AddMetadata(metadata *schema.ProjectMetadata) {
 	metadata.TerraformWorkspace = p.ctx.ProjectConfig.TerraformWorkspace
 }
 
-func (p *TerragruntProvider) LoadResources(usage map[string]*schema.UsageData) ([]*schema.Project, error) {
+func (p *TerragruntProvider) LoadResources(usage schema.UsageMap) ([]*schema.Project, error) {
 	// We want to run Terragrunt commands from the config dirs
 	// Terragrunt internally runs Terraform in the working dirs, so we need to be aware of these
 	// so we can handle reading and cleaning up the generated plan files.
@@ -124,21 +126,24 @@ func (p *TerragruntProvider) LoadResources(usage map[string]*schema.UsageData) (
 		metadata := config.DetectProjectMetadata(projectPath)
 		metadata.Type = p.Type()
 		p.AddMetadata(metadata)
-		name := schema.GenerateProjectName(metadata, p.ctx.ProjectConfig.Name, p.ctx.RunContext.Config.EnableDashboard)
+		name := p.ctx.ProjectConfig.Name
+		if name == "" {
+			name = metadata.GenerateProjectName(p.ctx.RunContext.VCSMetadata.Remote, p.ctx.RunContext.IsCloudEnabled())
+		}
 
 		project := schema.NewProject(name, metadata)
 
 		parser := NewParser(p.ctx, p.includePastResources)
-		pastResources, resources, err := parser.parseJSON(outs[i], usage)
+		partialPastResources, partialResources, err := parser.parseJSON(outs[i], usage)
 		if err != nil {
 			return projects, errors.Wrap(err, "Error parsing Terraform JSON")
 		}
 
 		project.HasDiff = !p.UseState
 		if project.HasDiff {
-			project.PastResources = pastResources
+			project.PartialPastResources = partialPastResources
 		}
-		project.Resources = resources
+		project.PartialResources = partialResources
 
 		projects = append(projects, project)
 	}
@@ -239,7 +244,7 @@ func (p *TerragruntProvider) generateStateJSONs(projectDirs []terragruntProjectD
 			defer os.Remove(opts.TerraformConfigFile)
 		}
 
-		out, err := p.runShow(opts, spinner, "")
+		out, err := p.runShow(opts, spinner, "", false)
 		if err != nil {
 			return outs, err
 		}
@@ -312,7 +317,7 @@ func (p *TerragruntProvider) generatePlanJSONs(projectDirs []terragruntProjectDi
 			defer os.Remove(opts.TerraformConfigFile)
 		}
 
-		out, err := p.runShow(opts, spinner, filepath.Join(projectDir.WorkingDir, planFile))
+		out, err := p.runShow(opts, spinner, filepath.Join(projectDir.WorkingDir, planFile), false)
 		if err != nil {
 			return outs, err
 		}

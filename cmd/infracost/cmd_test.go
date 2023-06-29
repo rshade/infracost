@@ -21,6 +21,7 @@ var (
 	projectPathRegex = regexp.MustCompile(`(Project: .*) \(.*/infracost/examples/.*\)`)
 	versionRegex     = regexp.MustCompile(`Infracost v.*`)
 	panicRegex       = regexp.MustCompile(`runtime\serror:([\w\d\n\r\[\]\:\/\.\\(\)\+\,\{\}\*\@\s\?]*)Environment`)
+	pathRegex        = regexp.MustCompile(`(/.*/)(infracost/infracost/cmd/infracost/testdata/.*)`)
 )
 
 type GoldenFileOptions = struct {
@@ -61,6 +62,22 @@ func GoldenFileCommandTest(t *testing.T, testName string, args []string, testOpt
 }
 
 func goldenFileCommandTest(t *testing.T, testName string, args []string, testOptions *GoldenFileOptions, hcl bool, ctxOptions ...func(ctx *config.RunContext)) {
+	actual := GetCommandOutput(t, args, testOptions, ctxOptions...)
+
+	goldenFilePath := filepath.Join("testdata", testName, testName+".golden")
+	if hcl {
+		hclFilePath := filepath.Join("testdata", testName, testName+".hcl.golden")
+		_, err := os.Stat(hclFilePath)
+		if err == nil {
+			testutil.AssertGoldenFile(t, hclFilePath, actual)
+			return
+		}
+	}
+
+	testutil.AssertGoldenFile(t, goldenFilePath, actual)
+}
+
+func GetCommandOutput(t *testing.T, args []string, testOptions *GoldenFileOptions, ctxOptions ...func(ctx *config.RunContext)) []byte {
 	t.Helper()
 
 	if testOptions == nil {
@@ -133,19 +150,7 @@ func goldenFileCommandTest(t *testing.T, testName string, args []string, testOpt
 		actual = append(actual, logBuf.Bytes()...)
 	}
 
-	actual = stripDynamicValues(actual)
-
-	goldenFilePath := filepath.Join("testdata", testName, testName+".golden")
-	if hcl {
-		hclFilePath := filepath.Join("testdata", testName, testName+".hcl.golden")
-		_, err := os.Stat(hclFilePath)
-		if err == nil {
-			testutil.AssertGoldenFile(t, hclFilePath, actual)
-			return
-		}
-	}
-
-	testutil.AssertGoldenFile(t, goldenFilePath, actual)
+	return stripDynamicValues(actual)
 }
 
 // stripDynamicValues strips out any values that change between test runs from the output,
@@ -156,6 +161,7 @@ func stripDynamicValues(actual []byte) []byte {
 	actual = projectPathRegex.ReplaceAll(actual, []byte("$1 REPLACED_PROJECT_PATH"))
 	actual = versionRegex.ReplaceAll(actual, []byte("Infracost vREPLACED_VERSION"))
 	actual = panicRegex.ReplaceAll(actual, []byte("runtime error: REPLACED ERROR\nEnvironment"))
+	actual = pathRegex.ReplaceAll(actual, []byte("REPLACED_PROJECT_PATH/$2"))
 
 	return actual
 }

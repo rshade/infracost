@@ -3,9 +3,10 @@ package aws
 import (
 	"strings"
 
-	"github.com/infracost/infracost/internal/schema"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
+
+	"github.com/infracost/infracost/internal/schema"
 )
 
 var DefaultProviderRegion = "us-east-1"
@@ -23,8 +24,7 @@ var arnAttributeMap = map[string]string{
 }
 
 func GetDefaultRefIDFunc(d *schema.ResourceData) []string {
-
-	defaultRefs := []string{d.Get("id").String()}
+	defaultRefs := []string{d.Get("id").String(), d.Get("name").String()}
 
 	arnAttr, ok := arnAttributeMap[d.Type]
 	if !ok {
@@ -36,6 +36,27 @@ func GetDefaultRefIDFunc(d *schema.ResourceData) []string {
 	}
 
 	return defaultRefs
+}
+
+func DefaultCloudResourceIDFunc(d *schema.ResourceData) []string {
+	var ids []string
+
+	id := d.Get("id").String()
+	if id != "" && id != "none" && !strings.HasPrefix(id, "hcl-") {
+		ids = append(ids, id)
+	}
+
+	arnAttr, ok := arnAttributeMap[d.Type]
+	if !ok {
+		arnAttr = "arn"
+	}
+
+	arn := d.Get(arnAttr).String()
+	if strings.HasPrefix(arn, "arn:aws:") && !strings.HasPrefix(arn, "arn:aws:hcl") {
+		ids = append(ids, arn)
+	}
+
+	return ids
 }
 
 func GetSpecialContext(d *schema.ResourceData) map[string]interface{} {

@@ -8,12 +8,12 @@ import (
 func getDBInstanceRegistryItem() *schema.RegistryItem {
 	return &schema.RegistryItem{
 		Name:                "aws_db_instance",
-		RFunc:               NewDBInstance,
+		CoreRFunc:           NewDBInstance,
 		ReferenceAttributes: []string{"replicate_source_db"},
 	}
 }
 
-func NewDBInstance(d *schema.ResourceData, u *schema.UsageData) *schema.Resource {
+func NewDBInstance(d *schema.ResourceData) schema.CoreResource {
 	piEnabled := d.Get("performance_insights_enabled").Bool()
 	piLongTerm := piEnabled && d.Get("performance_insights_retention_period").Int() > 7
 	engine := d.Get("engine").String()
@@ -25,6 +25,13 @@ func NewDBInstance(d *schema.ResourceData, u *schema.UsageData) *schema.Resource
 		}
 	}
 
+	iops := d.Get("iops").Float()
+	defaultStorageType := "gp2"
+	if iops > 0 {
+		defaultStorageType = "io1"
+	}
+
+	storageType := d.GetStringOrDefault("storage_type", defaultStorageType)
 	r := &aws.DBInstance{
 		Address:                              d.Address,
 		Region:                               d.Get("region").String(),
@@ -33,8 +40,9 @@ func NewDBInstance(d *schema.ResourceData, u *schema.UsageData) *schema.Resource
 		MultiAZ:                              d.Get("multi_az").Bool(),
 		LicenseModel:                         d.Get("license_model").String(),
 		BackupRetentionPeriod:                d.Get("backup_retention_period").Int(),
-		IOPS:                                 d.Get("iops").Float(),
-		StorageType:                          d.Get("storage_type").String(),
+		IOPS:                                 iops,
+		StorageType:                          storageType,
+		IOOptimized:                          false, // IO Optimized isn't supported by terraform yet
 		PerformanceInsightsEnabled:           piEnabled,
 		PerformanceInsightsLongTermRetention: piLongTerm,
 	}
@@ -43,6 +51,5 @@ func NewDBInstance(d *schema.ResourceData, u *schema.UsageData) *schema.Resource
 		r.AllocatedStorageGB = floatPtr(d.Get("allocated_storage").Float())
 	}
 
-	r.PopulateUsage(u)
-	return r.BuildResource()
+	return r
 }

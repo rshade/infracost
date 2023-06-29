@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/infracost/infracost/internal/apiclient"
+	"github.com/infracost/infracost/internal/clierror"
 	"github.com/infracost/infracost/internal/config"
 	"github.com/infracost/infracost/internal/output"
 	"github.com/infracost/infracost/internal/ui"
@@ -92,13 +94,15 @@ func outputCmd(ctx *config.RunContext) *cobra.Command {
 			}
 
 			combined, err := output.Combine(inputs)
-			if err != nil {
+			if errors.As(err, &clierror.WarningError{}) {
+				if format == "json" {
+					ui.PrintWarningf(cmd.ErrOrStderr(), err.Error())
+				}
+			} else if err != nil {
 				return err
 			}
 			combined.IsCIRun = ctx.IsCIRun()
-			for _, p := range combined.Projects {
-				p.Metadata.InfracostCommand = "output"
-			}
+			combined.Metadata.InfracostCommand = "output"
 
 			includeAllFields := "all"
 			validFields := []string{"price", "monthlyQuantity", "unit", "hourlyCost", "monthlyCost"}
@@ -127,8 +131,10 @@ func outputCmd(ctx *config.RunContext) *cobra.Command {
 				DashboardEndpoint: ctx.Config.DashboardEndpoint,
 				NoColor:           ctx.Config.NoColor,
 				Fields:            fields,
+				CurrencyFormat:    ctx.Config.CurrencyFormat,
 			}
 			opts.ShowSkipped, _ = cmd.Flags().GetBool("show-skipped")
+			opts.ShowAllProjects, _ = cmd.Flags().GetBool("show-all-projects")
 
 			validFieldsFormats := []string{"table", "html"}
 
@@ -136,12 +142,13 @@ func outputCmd(ctx *config.RunContext) *cobra.Command {
 				ui.PrintWarning(cmd.ErrOrStderr(), "fields is only supported for table and html output formats")
 			}
 
-			if ctx.IsCloudEnabled() {
+			if ctx.IsCloudUploadExplicitlyEnabled() {
 				if ctx.Config.IsSelfHosted() {
 					ui.PrintWarning(cmd.ErrOrStderr(), "Infracost Cloud is part of Infracost's hosted services. Contact hello@infracost.io for help.")
+				} else {
+					result := shareCombinedRun(ctx, combined, inputs)
+					combined.RunID, combined.ShareURL, combined.CloudURL = result.RunID, result.ShareURL, result.CloudURL
 				}
-
-				combined.RunID, combined.ShareURL = shareCombinedRun(ctx, combined, inputs)
 			}
 
 			b, err := output.FormatOutput(format, combined, opts)
@@ -172,6 +179,7 @@ func outputCmd(ctx *config.RunContext) *cobra.Command {
 	cmd.Flags().StringP("out-file", "o", "", "Save output to a file, helpful with format flag")
 
 	cmd.Flags().String("format", "table", "Output format: json, diff, table, html, github-comment, gitlab-comment, azure-repos-comment, bitbucket-comment, bitbucket-comment-summary, slack-message")
+	cmd.Flags().Bool("show-all-projects", false, "Show all projects in the table of the comment output")
 	cmd.Flags().Bool("show-skipped", false, "List unsupported and free resources")
 	cmd.Flags().StringSlice("fields", []string{"monthlyQuantity", "unit", "monthlyCost"}, "Comma separated list of output fields: all,price,monthlyQuantity,unit,hourlyCost,monthlyCost.\nSupported by table and html output formats")
 
@@ -185,7 +193,7 @@ func outputCmd(ctx *config.RunContext) *cobra.Command {
 	return cmd
 }
 
-func shareCombinedRun(ctx *config.RunContext, combined output.Root, inputs []output.ReportInput) (string, string) {
+func shareCombinedRun(ctx *config.RunContext, combined output.Root, inputs []output.ReportInput) apiclient.AddRunResponse {
 	combinedRunIds := []string{}
 	for _, input := range inputs {
 		if id := input.Root.RunID; id != "" {
@@ -200,7 +208,7 @@ func shareCombinedRun(ctx *config.RunContext, combined output.Root, inputs []out
 		log.WithError(err).Error("Failed to upload to Infracost Cloud")
 	}
 
-	return result.RunID, result.ShareURL
+	return result
 }
 
 func contains(arr []string, e string) bool {
